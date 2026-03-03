@@ -4,8 +4,33 @@ Single-file application (`app.py`) with a simple browser UI:
 
 - enter one keyword (example: `housing`)
 - app runs discovery + analytics in the background
-- view results in the browser table
+- live progress bar during run
+- results table when complete
 - export automatically to CSV (or Parquet when CSV exceeds 20MB)
+
+## Do you need a Reddit API account?
+
+Yes. You must create a Reddit app and provide credentials via environment variables.
+
+1. Go to: <https://www.reddit.com/prefs/apps>
+2. Create app type: **script**
+3. Set:
+
+```bash
+export REDDIT_CLIENT_ID="..."
+export REDDIT_CLIENT_SECRET="..."
+export REDDIT_USERNAME="..."
+export REDDIT_PASSWORD="..."
+export REDDIT_USER_AGENT="subreddit-finder-web/1.0 by <reddit_username>"
+```
+
+Without these values, the job cannot authenticate and will fail.
+
+## Safe performance behavior
+
+- Uses asynchronous requests with a CPU worker cap of **up to 10 workers** (`min(os.cpu_count(), 10)`)
+- Still prioritizes safe Reddit usage with throttling + retry/backoff
+- Progress bar updates across phases: expansion, discovery, metrics, export
 
 ## What it does
 
@@ -17,18 +42,6 @@ Single-file application (`app.py`) with a simple browser UI:
 6. Computes weekly contribution from `/r/{sub}/new` over last 7 days
 7. Ranks results
 8. Exports to `exports/`
-
-## Required environment variables
-
-```bash
-export REDDIT_CLIENT_ID="..."
-export REDDIT_CLIENT_SECRET="..."
-export REDDIT_USERNAME="..."
-export REDDIT_PASSWORD="..."
-export REDDIT_USER_AGENT="subreddit-finder-web/1.0 by <reddit_username>"
-```
-
-> Use an account that is permitted to view NSFW communities if you want NSFW subreddits included.
 
 ## Install dependencies
 

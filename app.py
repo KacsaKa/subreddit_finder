@@ -5,7 +5,6 @@ import asyncio
 import csv
 import datetime as dt
 import html
-import io
 import logging
 import os
 import threading
@@ -16,7 +15,7 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 logger = logging.getLogger("subreddit_finder_web")
@@ -67,7 +66,7 @@ class RedditClient:
     BASE_URL = "https://oauth.reddit.com"
     TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
 
-    def __init__(self, creds: RedditCredentials, requests_per_second: float = 1.0) -> None:
+    def __init__(self, creds: RedditCredentials, requests_per_second: float = 2.0) -> None:
         self.creds = creds
         try:
             import httpx  # type: ignore
@@ -168,9 +167,14 @@ def expand_keyword(keyword: str, min_terms: int = 20, max_terms: int = 50) -> li
     return terms[:max_terms]
 
 
-async def discover_subreddits(client: RedditClient, terms: list[str], per_term_limit: int = 800) -> list[str]:
+async def discover_subreddits(
+    client: RedditClient,
+    terms: list[str],
+    per_term_limit: int = 800,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[str]:
     discovered: dict[str, str] = {}
-    for term in terms:
+    for idx, term in enumerate(terms, start=1):
         after: str | None = None
         fetched = 0
         while True:
@@ -192,6 +196,9 @@ async def discover_subreddits(client: RedditClient, terms: list[str], per_term_l
             after = data.get("after")
             if not after or fetched >= per_term_limit:
                 break
+
+        if progress_cb:
+            progress_cb(idx, len(terms))
 
     return sorted(discovered.values())
 
@@ -230,10 +237,18 @@ def keyword_frequency_score(text: str, terms: list[str]) -> float:
     return float(sum(lowered.count(term.lower()) for term in terms))
 
 
-async def collect_metrics(client: RedditClient, names: list[str], terms: list[str], concurrency: int = 6) -> list[dict[str, Any]]:
+async def collect_metrics(
+    client: RedditClient,
+    names: list[str],
+    terms: list[str],
+    concurrency: int,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> list[dict[str, Any]]:
     sem = asyncio.Semaphore(concurrency)
+    done = 0
 
     async def worker(name: str) -> dict[str, Any] | None:
+        nonlocal done
         async with sem:
             try:
                 about_payload = await client.request(f"/r/{name}/about")
@@ -241,28 +256,35 @@ async def collect_metrics(client: RedditClient, names: list[str], terms: list[st
                 weekly = await compute_weekly_contribution(client, name)
             except Exception as exc:
                 logger.warning("Failed for %s: %s", name, exc)
-                return None
+                result = None
+            else:
+                description = " ".join(
+                    filter(None, [about.get("public_description", ""), about.get("description", "")])
+                ).strip()
+                row: dict[str, Any] = {
+                    "subreddit_name": about.get("display_name", name),
+                    "title": about.get("title", ""),
+                    "description": description,
+                    "subscribers": int(about.get("subscribers", 0) or 0),
+                    "weekly_contribution": weekly,
+                    "weekly_active_users": int(about.get("accounts_active", 0) or 0),
+                    "date_of_creation": dt.datetime.fromtimestamp(
+                        float(about.get("created_utc", 0) or 0), tz=dt.timezone.utc
+                    ).date().isoformat()
+                    if about.get("created_utc")
+                    else "",
+                    "visibility_status": about.get("subreddit_type", "unknown"),
+                    "nsfw_flag": bool(about.get("over18", False)),
+                }
+                row["score"] = keyword_frequency_score(
+                    f"{row['subreddit_name']} {row['title']} {row['description']}", terms
+                )
+                result = row
 
-            description = " ".join(filter(None, [about.get("public_description", ""), about.get("description", "")])).strip()
-            row = {
-                "subreddit_name": about.get("display_name", name),
-                "title": about.get("title", ""),
-                "description": description,
-                "subscribers": int(about.get("subscribers", 0) or 0),
-                "weekly_contribution": weekly,
-                "weekly_active_users": int(about.get("accounts_active", 0) or 0),
-                "date_of_creation": dt.datetime.fromtimestamp(
-                    float(about.get("created_utc", 0) or 0), tz=dt.timezone.utc
-                ).date().isoformat()
-                if about.get("created_utc")
-                else "",
-                "visibility_status": about.get("subreddit_type", "unknown"),
-                "nsfw_flag": bool(about.get("over18", False)),
-            }
-            row["score"] = keyword_frequency_score(
-                f"{row['subreddit_name']} {row['title']} {row['description']}", terms
-            )
-            return row
+            done += 1
+            if progress_cb:
+                progress_cb(done, len(names))
+            return result
 
     data = [row for row in await asyncio.gather(*(worker(name) for name in names)) if row is not None]
     data.sort(key=lambda x: (x["score"], x["subscribers"]), reverse=True)
@@ -293,7 +315,22 @@ def export_results(rows: list[dict[str, Any]], output_stem: str = "results", out
     return str(csv_path)
 
 
-async def run_pipeline(keyword: str) -> tuple[list[dict[str, Any]], str]:
+JOBS: dict[str, dict[str, Any]] = {}
+JOBS_LOCK = threading.Lock()
+
+
+def update_job(job_id: str, **kwargs: Any) -> None:
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(kwargs)
+
+
+def compute_safe_concurrency() -> int:
+    cpu_count = os.cpu_count() or 1
+    return max(2, min(10, cpu_count))
+
+
+async def run_pipeline(keyword: str, job_id: str) -> tuple[list[dict[str, Any]], str]:
     creds = RedditCredentials(
         client_id=os.getenv("REDDIT_CLIENT_ID", ""),
         client_secret=os.getenv("REDDIT_CLIENT_SECRET", ""),
@@ -314,34 +351,78 @@ async def run_pipeline(keyword: str) -> tuple[list[dict[str, Any]], str]:
     if missing:
         raise RuntimeError("Missing env vars: " + ", ".join(missing))
 
+    concurrency = compute_safe_concurrency()
+    update_job(job_id, cpu_workers=concurrency, phase="expansion", progress=5)
+
     client = RedditClient(creds)
     try:
         terms = expand_keyword(keyword)
-        names = await discover_subreddits(client, terms)
-        rows = await collect_metrics(client, names, terms)
+
+        def discovery_progress(done: int, total: int) -> None:
+            pct = 5 + int((done / max(1, total)) * 30)
+            update_job(job_id, phase="discovering subreddits", progress=min(pct, 35), done=done, total=total)
+
+        names = await discover_subreddits(client, terms, progress_cb=discovery_progress)
+        update_job(job_id, phase="collecting metrics", progress=35, done=0, total=len(names))
+
+        def metrics_progress(done: int, total: int) -> None:
+            pct = 35 + int((done / max(1, total)) * 55)
+            update_job(job_id, phase="collecting metrics", progress=min(pct, 90), done=done, total=total)
+
+        rows = await collect_metrics(client, names, terms, concurrency=concurrency, progress_cb=metrics_progress)
     finally:
         await client.close()
 
+    update_job(job_id, phase="exporting", progress=95)
     output = export_results(rows, output_stem=f"subreddit_results_{keyword}_{int(time.time())}")
+    update_job(job_id, phase="done", progress=100)
     return rows, output
-
-
-JOBS: dict[str, dict[str, Any]] = {}
 
 
 def start_job(keyword: str) -> str:
     job_id = str(uuid.uuid4())
-    JOBS[job_id] = {"keyword": keyword, "status": "running", "rows": [], "error": "", "output": ""}
+    with JOBS_LOCK:
+        JOBS[job_id] = {
+            "keyword": keyword,
+            "status": "running",
+            "rows": [],
+            "error": "",
+            "output": "",
+            "phase": "starting",
+            "progress": 0,
+            "done": 0,
+            "total": 0,
+            "cpu_workers": 0,
+        }
 
     def target() -> None:
         try:
-            rows, output = asyncio.run(run_pipeline(keyword))
-            JOBS[job_id].update({"status": "done", "rows": rows, "output": output})
+            rows, output = asyncio.run(run_pipeline(keyword, job_id))
+            update_job(job_id, status="done", rows=rows, output=output, progress=100)
         except Exception as exc:
-            JOBS[job_id].update({"status": "error", "error": str(exc)})
+            update_job(job_id, status="error", error=str(exc))
 
     threading.Thread(target=target, daemon=True).start()
     return job_id
+
+
+def progress_widget(job: dict[str, Any]) -> str:
+    progress = int(job.get("progress", 0))
+    phase = html.escape(str(job.get("phase", "running")))
+    done = int(job.get("done", 0))
+    total = int(job.get("total", 0))
+    workers = int(job.get("cpu_workers", 0))
+
+    return f"""
+    <p><b>Phase:</b> {phase}</p>
+    <p><b>CPU worker limit:</b> {workers} (safe cap: max 10)</p>
+    <div style='background:#e9ecef;border-radius:8px;overflow:hidden;height:22px;max-width:560px;'>
+      <div style='height:22px;width:{progress}%;background:#2f9e44;color:white;text-align:center;line-height:22px;font-size:12px;'>
+        {progress}%
+      </div>
+    </div>
+    <p>{done}/{total} items processed</p>
+    """
 
 
 def page_template(content: str) -> bytes:
@@ -349,6 +430,7 @@ def page_template(content: str) -> bytes:
     <html>
     <head>
       <title>Subreddit Finder</title>
+      <meta http-equiv="refresh" content="8">
       <style>
         body {{ font-family: Arial, sans-serif; margin: 30px; }}
         input[type=text] {{ width: 300px; padding: 8px; }}
@@ -380,7 +462,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/job":
             params = urllib.parse.parse_qs(parsed.query)
             job_id = params.get("id", [""])[0]
-            job = JOBS.get(job_id)
+            with JOBS_LOCK:
+                job = JOBS.get(job_id)
             if not job:
                 self._html(page_template("<p>Job not found.</p>"), status=HTTPStatus.NOT_FOUND)
                 return
@@ -388,13 +471,13 @@ class Handler(BaseHTTPRequestHandler):
             if job["status"] == "running":
                 self._html(
                     page_template(
-                        f"<p>Job running for <b>{html.escape(job['keyword'])}</b>... refresh this page.</p>"
+                        f"<p>Job running for <b>{html.escape(job['keyword'])}</b>.</p>{progress_widget(job)}"
                     )
                 )
                 return
 
             if job["status"] == "error":
-                self._html(page_template(f"<p style='color:red'>Error: {html.escape(job['error'])}</p>"))
+                self._html(page_template(f"{progress_widget(job)}<p style='color:red'>Error: {html.escape(job['error'])}</p>"))
                 return
 
             rows = job["rows"]
@@ -405,6 +488,7 @@ class Handler(BaseHTTPRequestHandler):
                 for r in rows[:200]
             )
             table = f"""
+              {progress_widget(job)}
               <p>Done. Rows: <b>{len(rows)}</b></p>
               <p>Export file: <code>{output}</code></p>
               <table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>

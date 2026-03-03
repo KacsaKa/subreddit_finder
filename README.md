@@ -1,107 +1,75 @@
-# subreddit_finder
+# subreddit_finder (Web App)
 
-CLI application for **Reddit subreddit discovery + analytics export**.
+Single-file application (`app.py`) with a simple browser UI:
 
-It accepts one keyword (example: `housing`), expands it semantically, discovers subreddits via Reddit search pagination, computes weekly contribution counts from `/new`, and exports to CSV or Parquet.
+- enter one keyword (example: `housing`)
+- app runs discovery + analytics in the background
+- view results in the browser table
+- export automatically to CSV (or Parquet when CSV exceeds 20MB)
 
-## Features
+## What it does
 
-- OAuth-authenticated Reddit API access
-- Best-effort subreddit discovery (`/subreddits/search`, paginated)
-- Semantic expansion (curated terms + optional WordNet)
-- Deduplication by subreddit name
-- Per-subreddit metric collection
-- Weekly contribution computation (submissions in last 7 days)
-- Ranking via keyword-frequency score
-- Export:
-  - CSV by default
-  - Parquet if CSV would exceed 20MB
-- Includes NSFW communities when your authenticated account can access them
+1. OAuth-authenticates with Reddit
+2. Expands your keyword semantically (curated + optional WordNet)
+3. Discovers subreddits via `/subreddits/search` pagination
+4. Deduplicates by subreddit name
+5. Fetches subreddit metadata (`/r/{sub}/about`)
+6. Computes weekly contribution from `/r/{sub}/new` over last 7 days
+7. Ranks results
+8. Exports to `exports/`
 
-## Output columns
-
-- `subreddit_name`
-- `title`
-- `description`
-- `subscribers`
-- `weekly_contribution`
-- `weekly_active_users`
-- `date_of_creation`
-- `visibility_status`
-- `nsfw_flag`
-
-## Project structure
-
-- `src/subreddit_finder/discovery.py` — search + pagination
-- `src/subreddit_finder/semantic.py` — query expansion and scoring
-- `src/subreddit_finder/metrics.py` — `/about` + weekly contribution computation
-- `src/subreddit_finder/exporter.py` — CSV/Parquet output switch
-- `src/subreddit_finder/reddit_client.py` — OAuth + retries + rate throttling
-- `src/subreddit_finder/cli.py` — user entrypoint
-
-## Setup
-
-### 1) Install
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
-
-### 2) Reddit OAuth configuration
-
-Create a Reddit app at <https://www.reddit.com/prefs/apps>:
-
-- Type: **script**
-- Collect:
-  - client ID
-  - client secret
-
-Set environment variables:
+## Required environment variables
 
 ```bash
 export REDDIT_CLIENT_ID="..."
 export REDDIT_CLIENT_SECRET="..."
 export REDDIT_USERNAME="..."
 export REDDIT_PASSWORD="..."
-export REDDIT_USER_AGENT="subreddit-finder/0.1 by <reddit_username>"
+export REDDIT_USER_AGENT="subreddit-finder-web/1.0 by <reddit_username>"
 ```
 
-> Important: use an account allowed to view 18+ communities if you want NSFW subreddits included.
+> Use an account that is permitted to view NSFW communities if you want NSFW subreddits included.
+
+## Install dependencies
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install httpx pyarrow
+```
+
+Optional semantic upgrade (WordNet):
+
+```bash
+pip install nltk
+python -m nltk.downloader wordnet
+```
+
+If your environment requires proxy settings:
+
+```bash
+export HTTPS_PROXY="http://<proxy-host>:<proxy-port>"
+export HTTP_PROXY="http://<proxy-host>:<proxy-port>"
+```
 
 ## Run
 
 ```bash
-subreddit-finder housing --max-expanded-terms 35 --per-term-limit 800 --concurrency 6 --output-dir exports
+python app.py
 ```
 
-### Key CLI options
+Then open:
 
-- `keyword` (positional): base search term
-- `--max-expanded-terms`: cap for semantic expansion list
-- `--per-term-limit`: max search results processed per expanded term
-- `--concurrency`: concurrent subreddit metric workers
-- `--output-dir`: output folder
+- `http://localhost:8080`
 
-## How weekly contribution is computed
+## Output fields
 
-For each discovered subreddit:
-
-1. Fetch `/r/{subreddit}/new` posts.
-2. Count submissions where `created_utc >= now - 7 days`.
-3. Stop paging when older posts are encountered.
-
-## Notes & limits
-
-- Reddit does not provide full subreddit enumeration; discovery is best-effort.
-- `accounts_active` is used for `weekly_active_users` when available, though it may reflect currently active users.
-- Some private/restricted subreddits may fail metadata fetch; failures are logged.
-- WordNet expansion is optional and only used when `nltk` + corpus are available locally.
-
-## Development checks
-
-```bash
-python -m compileall src
-python -m subreddit_finder.cli --help
-```
+- subreddit_name
+- title
+- description
+- subscribers
+- weekly_contribution
+- weekly_active_users
+- date_of_creation
+- visibility_status
+- nsfw_flag

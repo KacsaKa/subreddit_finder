@@ -6,14 +6,10 @@ from typing import Any
 
 CSV_COLUMNS = [
     "subreddit_name",
-    "title",
+    "subreddit_url",
     "description",
     "subscribers",
-    "weekly_contribution",
-    "weekly_active_users",
-    "date_of_creation",
-    "visibility_status",
-    "nsfw_flag",
+    "active_users",
 ]
 
 

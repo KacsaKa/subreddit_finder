@@ -1,34 +1,41 @@
-# Subreddit Finder – 100% Beginner Safe Guide
+# Subreddit Finder – High Throughput Edition
 
-Ez a projekt egy egyszerű weboldalt indít el, ahol **egy mezőbe beírod a kulcsszót**, és a háttérben lefut az adatgyűjtés.
+Ez a verzió egy **több-jobos**, nagy áteresztésű scraper rendszer:
 
-## Fontos változás
-- Alapértelmezésben most **public mód** fut automatikusan (OAuth nélkül is).
-- Ha megadod a Reddit OAuth adatokat, az app automatikusan OAuth módra vált (`oauth_app` vagy `oauth_user`).
-- Cél: OAuth nélkül is induljon "seamlessly", de OAuth módban stabilabb és megbízhatóbb marad nagy terhelésnél.
+- akár **50+ keyword** egyszerre queue-ba tehető,
+- jobonként külön státusz/progress/output,
+- közös globális limiter védi az összes kérést,
+- csak az `/about` endpointot használja metrikához (nincs post/new scrape).
+
+## Kötelező output séma (pontosan ez)
+
+- `subreddit_name`
+- `subreddit_url`
+- `description`
+- `subscribers`
+- `active_users`
+
+## Fő architektúra
+
+1. **Global shared rate limiter**
+   - minden job ugyanazt a request budgetet használja.
+2. **JobManager + queue + worker pool**
+   - job státuszok: `queued`, `running`, `done`, `error`.
+3. **Streaming pipeline jobonként**
+   - discovery producer → metrics consumer(ek) → streamelt CSV writer.
+4. **Közös HTTP kapcsolatpool**
+   - jobb keepalive és throughput.
 
 ---
 
-## 1) Mire lesz szükséged
-
-1. Python 3.10+
-2. Terminál (Windows: PowerShell)
-3. Internet kapcsolat
-4. (Erősen ajánlott) Reddit API adatok:
-   - `REDDIT_CLIENT_ID`
-   - `REDDIT_CLIENT_SECRET`
-
-> OAuth adatok nélkül is fut (public), de sok 403 esetén érdemes OAuth-ra váltani a stabilitásért.
-
----
-
-## 2) Telepítés (mindenkinek ajánlott)
+## Indítás
 
 ### macOS / Linux
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install httpx pyarrow
+python app.py
 ```
 
 ### Windows PowerShell
@@ -36,150 +43,81 @@ pip install httpx pyarrow
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install httpx pyarrow
-```
-
----
-
-## 3) Reddit OAuth beállítás (ajánlott, production)
-
-Hozz létre Reddit appot (`script` vagy read-only app), majd állítsd be:
-
-### macOS / Linux
-```bash
-export REDDIT_CLIENT_ID="..."
-export REDDIT_CLIENT_SECRET="..."
-export REDDIT_USER_AGENT="subreddit-finder-web/2.0 by <reddit_username>"
-# opcionális user-context
-export REDDIT_USERNAME="..."
-export REDDIT_PASSWORD="..."
-```
-
-### Windows PowerShell
-```powershell
-$env:REDDIT_CLIENT_ID="..."
-$env:REDDIT_CLIENT_SECRET="..."
-$env:REDDIT_USER_AGENT="subreddit-finder-web/2.0 by <reddit_username>"
-# opcionális user-context
-$env:REDDIT_USERNAME="..."
-$env:REDDIT_PASSWORD="..."
-```
-
-Auth mód automatikus:
-- `client_id + client_secret` => `oauth_app` (client_credentials)
-- + `username + password` => `oauth_user` (password flow)
-
----
-
-## 4) Melyik scriptet indítsd?
-
-Mostantól **két optimalizált indító script** van:
-
-- Apple Silicon gépen:
-  ```bash
-  python app_apple_silicon.py
-  ```
-  Ez a profil a teljesítmény-magokra (performance cores) optimalizálja a worker számot, és ha elérhető, `uvloop`-ot használ.
-- Windows gépen:
-  ```powershell
-  python app_windows.py
-  ```
-
-Ha ezek helyett `app.py`-t indítod, akkor általános profil fut.
-
----
-
-## 4.1) Apple Silicon sebességhangolás
-
-- A rendszer megpróbálja automatikusan kiolvasni a performance core számot (`hw.perflevel0.physicalcpu`).
-- Ebből számolja a worker limitet (I/O workload miatt tipikusan `perf_cores * 2`, max 12).
-- A request rate budgetet a státusz oldalon is látod (`Request rate budget`).
-
----
-
-## 5) Hol írd be a kulcsszót?
-
-1. Nyisd meg a böngészőben:
-   - <http://localhost:8080>
-2. A főoldalon látni fogsz egy beviteli mezőt:
-   - `Enter keyword, e.g. housing`
-3. Írd be a kulcsszót, kattints `Run`.
-
-Ha fut a munka:
-- látszik a **progress bar**
-- látszik a fázis (`discovering`, `collecting`, `exporting`)
-- látszik az auth mód (`oauth_app`, `oauth_user`, vagy `public`)
-- látszik, hogy épp melyik subredditen dolgozik (`Current: r/...`)
-- terminálban is fut progress bar a metrika-gyűjtéshez
-
----
-
-## 6) Public mód (alapértelmezett)
-
-Nem kell külön beállítás, automatikusan működik:
-
-```bash
 python app.py
 ```
 
-Ha mégis szeretnéd kikapcsolni a public módot (csak OAuth engedélyezése):
-
-### macOS / Linux
-```bash
-export ALLOW_PUBLIC_MODE=0
-python app.py
-```
-
-### Windows PowerShell
-```powershell
-$env:ALLOW_PUBLIC_MODE="0"
-python app.py
-```
+Alap URL: <http://localhost:8080>
 
 ---
 
-## 7) Mit javítottunk a stabilitáson?
+## UI funkciók
 
-- 403-ra exponenciális backoff + jitter (public módban rövidebb, agresszívebb limittel)
-- 429-ra `Retry-After` figyelembevétele + jitter
-- subreddit-szintű hard timeout (`SUBREDDIT_TIMEOUT_SECONDS`, default 75s), timeout esetén skip
-- részletes hibalogok (`x-ratelimit-*`, `retry-after`, `cf-ray`, stb.)
-- endpoint telemetria (403/429 számláló endpointonként)
-- valódi párhuzamosság lock nélküli globális/endpoint rate limiterrel
-- keresés terhelésének csökkentése (kevesebb term + stop condition)
+### `/`
+- 5 gyors keyword mező (`keyword1...keyword5`)
+- bulk textarea (50+ keyword, soronként)
 
----
+### `/jobs`
+Dashboard oszlopok:
+- Keyword
+- Status
+- Phase
+- Progress
+- Done/Total
+- Running since
+- Elapsed
+- ETA
+- Linkek (`view`, `download`)
 
-## 8) Output
-
-Az eredmények az `exports/` mappába kerülnek.
-
-- alapértelmezett: CSV
-- ha >20MB: Parquet
-
-Oszlopok:
-- `subreddit_name`
-- `subreddit_url`
-- `description`
-- `subscribers`
-- `active_users`
-
-A webes táblázatban a `subreddit_url` kattintható link.
-
-Megjegyzés a teljesítményhez:
-- A frissített script **nem számol weekly contribution metrikát**.
-- Minden subreddithez csak az `/r/{subreddit}/about` adatokat használja, ezért jóval gyorsabb.
+### `/job?id=...`
+Részletes nézet:
+- current subreddit
+- current discovery term
+- 403/429 telemetry endpointonként
+- top preview táblázat kattintható `subreddit_url` linkkel
 
 ---
 
-## 9) Gyors hibakeresés
+## Bulk API
 
-### `localhost refused to connect`
-- Nincs futó szerver. Indítsd újra: `python app_apple_silicon.py` vagy `python app_windows.py`.
+### `POST /jobs/bulk`
+Támogatott formátumok:
+- `text/plain` vagy form mező (`keywords`) newline-separated
+- `application/json` tömb: `{"keywords": [...]} ` helyett közvetlen JSON array (`["housing", "rent"]`)
 
-### Sok 403 a logban
-- Nincs OAuth vagy túl agresszív hálózati környezet.
-- Ellenőrizd, hogy `oauth_app` / `oauth_user` mód fut-e.
-- Nézd a warning sorokat (`HTTP 403` / `HTTP 429`), ezek jelzik ha retry/backoff miatt vár a folyamat.
+---
 
-### `Missing dependency 'httpx'`
-- Nem telepítetted a csomagokat az aktív virtuális környezetbe.
+## Teljesítményhangolás
+
+A rendszer automatikusan auth mód alapján választ tuningot:
+
+- **Public mód**: konzervatívabb global RPS + kisebb worker szám
+- **OAuth mód**: magasabb throughput (több párhuzamos job és worker)
+
+Fontos: ez I/O-bound workload, a gyorsulás kulcsa a concurrency + connection reuse + global limiter.
+
+---
+
+## Timeout és stabilitás
+
+- subreddit-szintű hard timeout: `SUBREDDIT_TIMEOUT_SECONDS` (default `75`)
+- timeout esetén skip, job nem fagy be
+- 403/429 warning logok megmaradnak diagnosztikára
+
+---
+
+## Fájlnevek és export
+
+Minden job külön fájlba ír:
+
+- `exports/subreddit_results_{keyword}_{job_id}.csv`
+
+Nagy fájl esetén opcionálisan készülhet parquet is.
+
+---
+
+## Platform launcherek
+
+- Apple Silicon: `python app_apple_silicon.py`
+- Windows: `python app_windows.py`
+
+Ezek a launcherek megtartva maradtak.

@@ -156,16 +156,15 @@ Az eredmények az `exports/` mappába kerülnek.
 Oszlopok:
 - `subreddit_name`
 - `subreddit_url`
-- `title`
 - `description`
 - `subscribers`
-- `weekly_contribution`
-- `weekly_active_users`
-- `date_of_creation`
-- `visibility_status`
-- `nsfw_flag`
+- `active_users`
 
 A webes táblázatban a `subreddit_url` kattintható link.
+
+Megjegyzés a teljesítményhez:
+- A frissített script **nem számol weekly contribution metrikát**.
+- Minden subreddithez csak az `/r/{subreddit}/about` adatokat használja, ezért jóval gyorsabb.
 
 ---
 
@@ -180,4 +179,3 @@ A webes táblázatban a `subreddit_url` kattintható link.
 
 ### `Missing dependency 'httpx'`
 - Nem telepítetted a csomagokat az aktív virtuális környezetbe.
-

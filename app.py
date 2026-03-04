@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import datetime as dt
 import html
 import logging
 import os
@@ -26,14 +25,9 @@ logger = logging.getLogger("subreddit_finder_web")
 EXPORT_COLUMNS = [
     "subreddit_name",
     "subreddit_url",
-    "title",
     "description",
     "subscribers",
-    "weekly_contribution",
-    "weekly_active_users",
-    "date_of_creation",
-    "visibility_status",
-    "nsfw_flag",
+    "active_users",
 ]
 
 CURATED_SYNONYMS = {
@@ -356,36 +350,6 @@ async def discover_subreddits(
     return sorted(discovered.values())
 
 
-async def compute_weekly_contribution(client: RedditClient, subreddit_name: str, max_pages: int = 12) -> int:
-    threshold = dt.datetime.now(tz=dt.timezone.utc).timestamp() - 7 * 24 * 3600
-    after: str | None = None
-    total = 0
-
-    for _ in range(max_pages):
-        payload = await client.request(f"/r/{subreddit_name}/new", params={"limit": 100, "after": after})
-        data = payload.get("data", {})
-        children = data.get("children", [])
-        if not children:
-            break
-
-        older_found = False
-        for item in children:
-            created = float(item.get("data", {}).get("created_utc", 0))
-            if created >= threshold:
-                total += 1
-            else:
-                older_found = True
-
-        if older_found:
-            break
-
-        after = data.get("after")
-        if not after:
-            break
-
-    return total
-
-
 def keyword_frequency_score(text: str, terms: list[str]) -> float:
     lowered = text.lower()
     return float(sum(lowered.count(term.lower()) for term in terms))
@@ -405,10 +369,7 @@ async def collect_metrics(
         nonlocal done
         async with sem:
             try:
-                about_payload, weekly = await asyncio.gather(
-                    client.request(f"/r/{name}/about"),
-                    compute_weekly_contribution(client, name),
-                )
+                about_payload = await client.request(f"/r/{name}/about")
                 about = about_payload.get("data", {})
             except Exception as exc:
                 logger.warning("Failed for %s: %s", name, exc)
@@ -422,22 +383,11 @@ async def collect_metrics(
                 row: dict[str, Any] = {
                     "subreddit_name": about.get("display_name", name),
                     "subreddit_url": subreddit_url,
-                    "title": about.get("title", ""),
                     "description": description,
                     "subscribers": int(about.get("subscribers", 0) or 0),
-                    "weekly_contribution": weekly,
-                    "weekly_active_users": int(about.get("accounts_active", 0) or 0),
-                    "date_of_creation": dt.datetime.fromtimestamp(
-                        float(about.get("created_utc", 0) or 0), tz=dt.timezone.utc
-                    ).date().isoformat()
-                    if about.get("created_utc")
-                    else "",
-                    "visibility_status": about.get("subreddit_type", "unknown"),
-                    "nsfw_flag": bool(about.get("over18", False)),
+                    "active_users": int(about.get("accounts_active", 0) or 0),
                 }
-                row["score"] = keyword_frequency_score(
-                    f"{row['subreddit_name']} {row['title']} {row['description']}", terms
-                )
+                row["score"] = keyword_frequency_score(f"{row['subreddit_name']} {row['description']}", terms)
                 result = row
 
             done += 1

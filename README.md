@@ -101,6 +101,7 @@ Ha nincs OAuth, az app public módban fut.
 ## Tippek a stabil futáshoz
 
 - Public módban maradj `JOB_WORKERS=1`-en.
+- Public 403 esetén a keresés megpróbálja a `www.reddit.com` mellett az `old.reddit.com` hostot is, és egyszer relaxált (`include_over_18` nélkül) kereséssel is próbálkozik.
 - Ha sok 403-at látsz, válts OAuth módra.
 - Ha sok kulcsszót adsz meg, hagyd queue-ban lefutni (babysitting nélkül).
 

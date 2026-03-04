@@ -71,7 +71,7 @@ class RedditClient:
             raise RuntimeError("Missing dependency 'httpx'. Install it with: pip install httpx pyarrow") from exc
         self._client = httpx.AsyncClient(timeout=30.0)
         self._token: str | None = None
-        self._public_base = "https://www.reddit.com"
+        self._public_bases = ["https://www.reddit.com", "https://old.reddit.com"]
         self._token_expires_at = 0.0
         self._last_request = 0.0
         self._rps = requests_per_second
@@ -117,7 +117,10 @@ class RedditClient:
                 req_urls = [f"{self.BASE_URL}{path}"]
                 headers["Authorization"] = f"bearer {self._token}"
             else:
-                req_urls = [f"{self._public_base}{path}.json"]
+                if path.startswith("/subreddits/search"):
+                    req_urls = [f"{base}{path}.json" for base in self._public_bases]
+                else:
+                    req_urls = [f"{self._public_bases[0]}{path}.json"]
 
             last_error: str | None = None
             for attempt in range(1, 4 if not self.auth_mode else 6):
@@ -195,9 +198,23 @@ async def discover_subreddits(
                 )
             except RedditAPIError as err:
                 if not client.auth_mode and "403" in str(err):
-                    logger.warning("Public mode blocked for term '%s' (%s). Skipping term.", term, err)
-                    break
-                raise
+                    logger.warning("Public mode blocked for term '%s' with over18=on, retrying relaxed search.", term)
+                    try:
+                        payload = await client.request(
+                            "/subreddits/search",
+                            params={
+                                "q": term,
+                                "type": "sr",
+                                "sort": "relevance",
+                                "limit": 100,
+                                "after": after,
+                            },
+                        )
+                    except RedditAPIError as err2:
+                        logger.warning("Public mode blocked for term '%s' (%s). Skipping term.", term, err2)
+                        break
+                else:
+                    raise
             data = payload.get("data", {})
             children: list[dict[str, Any]] = data.get("children", [])
             if not children:

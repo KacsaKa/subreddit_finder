@@ -9,6 +9,7 @@ import os
 import platform
 import random
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -214,8 +215,11 @@ class RedditClient:
         else:
             req_urls = [f"{base}{path}.json" for base in self._public_bases]
 
+        is_public_mode = self.auth_mode == "public"
+        max_attempts = 3 if is_public_mode else 7
+
         last_error: str | None = None
-        for attempt in range(1, 8):
+        for attempt in range(1, max_attempts + 1):
             for url in req_urls:
                 response = await self._client.get(url, params=req_params, headers=headers)
                 code = response.status_code
@@ -225,20 +229,23 @@ class RedditClient:
 
                 if code == 429:
                     retry_after = response.headers.get("retry-after")
-                    delay = float(retry_after) if retry_after and retry_after.isdigit() else min(2**attempt, 300)
-                    delay += random.uniform(0.1, 1.2)
+                    fallback_cap = 15 if is_public_mode else 300
+                    delay = float(retry_after) if retry_after and retry_after.isdigit() else min(2**attempt, fallback_cap)
+                    delay += random.uniform(0.1, 1.0 if is_public_mode else 1.2)
                     await asyncio.sleep(delay)
                     last_error = f"429 rate limited"
                     continue
 
                 if code == 403:
-                    backoff = min(10 * (2 ** (attempt - 1)), 300) + random.uniform(0.2, 1.5)
+                    cap = 15 if is_public_mode else 300
+                    base = 2 if is_public_mode else 10
+                    backoff = min(base * (2 ** (attempt - 1)), cap) + random.uniform(0.2, 1.2)
                     await asyncio.sleep(backoff)
                     last_error = f"403 forbidden"
                     continue
 
                 if code in {500, 502, 503, 504}:
-                    await asyncio.sleep(min(2**attempt, 20) + random.uniform(0.1, 0.8))
+                    await asyncio.sleep(min(2**attempt, 10 if is_public_mode else 20) + random.uniform(0.1, 0.8))
                     last_error = f"{code} transient"
                     continue
 
@@ -248,7 +255,7 @@ class RedditClient:
 
                 return response.json()
 
-            await asyncio.sleep(min(2**attempt, 15) + random.uniform(0.1, 0.8))
+            await asyncio.sleep(min(2**attempt, 6 if is_public_mode else 15) + random.uniform(0.1, 0.8))
 
         raise RedditAPIError(f"{path} failed after retries ({last_error})")
 
@@ -360,6 +367,8 @@ async def collect_metrics(
     names: list[str],
     terms: list[str],
     concurrency: int,
+    job_id: str,
+    subreddit_timeout_s: float = 75.0,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     sem = asyncio.Semaphore(concurrency)
@@ -368,9 +377,13 @@ async def collect_metrics(
     async def worker(name: str) -> dict[str, Any] | None:
         nonlocal done
         async with sem:
+            update_job(job_id, current=name)
             try:
-                about_payload = await client.request(f"/r/{name}/about")
+                about_payload = await asyncio.wait_for(client.request(f"/r/{name}/about"), timeout=subreddit_timeout_s)
                 about = about_payload.get("data", {})
+            except asyncio.TimeoutError:
+                logger.warning("Timeout for %s after %.1fs. Skipping.", name, subreddit_timeout_s)
+                result = None
             except Exception as exc:
                 logger.warning("Failed for %s: %s", name, exc)
                 result = None
@@ -432,6 +445,20 @@ def update_job(job_id: str, **kwargs: Any) -> None:
     with JOBS_LOCK:
         if job_id in JOBS:
             JOBS[job_id].update(kwargs)
+
+
+def print_terminal_progress(job_id: str, phase: str, done: int, total: int, current: str = "") -> None:
+    width = 28
+    ratio = (done / total) if total > 0 else 0.0
+    filled = int(width * ratio)
+    bar = "#" * filled + "-" * (width - filled)
+    msg = f"\r[{bar}] {done}/{total} {phase}"
+    if current:
+        msg += f" | current: r/{current}"
+    sys.stdout.write(msg)
+    sys.stdout.flush()
+    if total > 0 and done >= total:
+        sys.stdout.write("\n")
 
 
 def get_profile() -> Literal["default", "apple_silicon", "windows"]:
@@ -523,15 +550,28 @@ async def run_pipeline(keyword: str, job_id: str) -> tuple[list[dict[str, Any]],
 
         def metrics_progress(done: int, total: int) -> None:
             pct = 35 + int((done / max(1, total)) * 55)
+            current = ""
+            with JOBS_LOCK:
+                if job_id in JOBS:
+                    current = str(JOBS[job_id].get("current", ""))
             update_job(job_id, phase="collecting metrics", progress=min(pct, 90), done=done, total=total)
+            print_terminal_progress(job_id, "metrics", done, total, current=current)
 
-        rows = await collect_metrics(client, names, terms, concurrency=concurrency, progress_cb=metrics_progress)
+        rows = await collect_metrics(
+            client,
+            names,
+            terms,
+            concurrency=concurrency,
+            job_id=job_id,
+            subreddit_timeout_s=float(os.getenv("SUBREDDIT_TIMEOUT_SECONDS", "75")),
+            progress_cb=metrics_progress,
+        )
     finally:
         await client.close()
 
-    update_job(job_id, phase="exporting", progress=95)
+    update_job(job_id, phase="exporting", progress=95, current="")
     output = export_results(rows, output_stem=f"subreddit_results_{keyword}_{int(time.time())}")
-    update_job(job_id, phase="done", progress=100, telemetry=client.telemetry)
+    update_job(job_id, phase="done", progress=100, telemetry=client.telemetry, current="")
     return rows, output
 
 
@@ -552,14 +592,16 @@ def start_job(keyword: str) -> str:
             "auth_mode": "unknown",
             "profile": get_profile(),
             "telemetry": {},
+            "request_rate": 0.0,
+            "current": "",
         }
 
     def target() -> None:
         try:
             rows, output = asyncio.run(run_pipeline(keyword, job_id))
-            update_job(job_id, status="done", rows=rows, output=output, progress=100)
+            update_job(job_id, status="done", rows=rows, output=output, progress=100, current="")
         except Exception as exc:
-            update_job(job_id, status="error", error=str(exc))
+            update_job(job_id, status="error", error=str(exc), current="")
 
     threading.Thread(target=target, daemon=True).start()
     return job_id
@@ -574,6 +616,7 @@ def progress_widget(job: dict[str, Any]) -> str:
     auth_mode = html.escape(str(job.get("auth_mode", "unknown")))
     profile = html.escape(str(job.get("profile", "default")))
     request_rate = float(job.get("request_rate", 0.0))
+    current = html.escape(str(job.get("current", "")))
 
     return f"""
     <p><b>Mode:</b> {auth_mode}</p>
@@ -581,6 +624,7 @@ def progress_widget(job: dict[str, Any]) -> str:
     <p><b>Phase:</b> {phase}</p>
     <p><b>CPU worker limit:</b> {workers} (safe cap: max 12)</p>
     <p><b>Request rate budget:</b> {request_rate:.2f} req/s</p>
+    <p><b>Current:</b> {('r/' + current) if current else '-'}</p>
     <div style='background:#e9ecef;border-radius:8px;overflow:hidden;height:22px;max-width:560px;'>
       <div style='height:22px;width:{progress}%;background:#2f9e44;color:white;text-align:center;line-height:22px;font-size:12px;'>
         {progress}%

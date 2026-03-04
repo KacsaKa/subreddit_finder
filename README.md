@@ -108,6 +108,8 @@ Ha fut a munka:
 - látszik a **progress bar**
 - látszik a fázis (`discovering`, `collecting`, `exporting`)
 - látszik az auth mód (`oauth_app`, `oauth_user`, vagy `public`)
+- látszik, hogy épp melyik subredditen dolgozik (`Current: r/...`)
+- terminálban is fut progress bar a metrika-gyűjtéshez
 
 ---
 
@@ -137,8 +139,9 @@ python app.py
 
 ## 7) Mit javítottunk a stabilitáson?
 
-- 403-ra exponenciális backoff + jitter
+- 403-ra exponenciális backoff + jitter (public módban rövidebb, agresszívebb limittel)
 - 429-ra `Retry-After` figyelembevétele + jitter
+- subreddit-szintű hard timeout (`SUBREDDIT_TIMEOUT_SECONDS`, default 75s), timeout esetén skip
 - részletes hibalogok (`x-ratelimit-*`, `retry-after`, `cf-ray`, stb.)
 - endpoint telemetria (403/429 számláló endpointonként)
 - valódi párhuzamosság lock nélküli globális/endpoint rate limiterrel
@@ -176,6 +179,7 @@ Megjegyzés a teljesítményhez:
 ### Sok 403 a logban
 - Nincs OAuth vagy túl agresszív hálózati környezet.
 - Ellenőrizd, hogy `oauth_app` / `oauth_user` mód fut-e.
+- Nézd a warning sorokat (`HTTP 403` / `HTTP 429`), ezek jelzik ha retry/backoff miatt vár a folyamat.
 
 ### `Missing dependency 'httpx'`
 - Nem telepítetted a csomagokat az aktív virtuális környezetbe.

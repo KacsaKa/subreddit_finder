@@ -1,26 +1,150 @@
-# subreddit_finder (Web App)
+# Reddit Subreddit Discovery & Analytics (Beginner Guide)
 
-Single-file application (`app.py`) with a simple browser UI:
+This app gives you a simple webpage where you can type a keyword (for example `housing`) and get subreddit results.
 
-- enter one keyword (example: `housing`)
-- app runs discovery + analytics in the background
-- live progress bar during run
-- results table when complete
-- export automatically to CSV (or Parquet when CSV exceeds 20MB)
+If you are not technical, follow this file **exactly in order**.
 
-## Reddit API setup (free/public mode supported)
+---
 
-You can run this app in two modes:
+## What you should see when it works
 
-1. **Public free mode (no Reddit app required)**
-   - The app uses Reddit's public JSON API endpoints (`www.reddit.com/...json`)
-   - No `REDDIT_CLIENT_ID` or `REDDIT_CLIENT_SECRET` needed
-   - Good for discovery/testing
+After setup, opening `http://localhost:8080` should show:
 
-2. **OAuth mode (recommended for full access)**
-   - Required for best reliability and broader access (including NSFW communities if your account is allowed)
-   - Create a Reddit app at <https://www.reddit.com/prefs/apps> (type: `script`)
-   - Set:
+- a title: **Reddit Subreddit Discovery & Analytics**
+- one text box: **Enter keyword, e.g. housing**
+- a **Run** button
+
+If you do not see this, go to **Troubleshooting** below.
+
+---
+
+## 1) Install Python (one-time)
+
+You need **Python 3.10+**.
+
+- Check if installed:
+
+```bash
+python --version
+```
+
+or on some computers:
+
+```bash
+python3 --version
+```
+
+If command is not found, install Python from: <https://www.python.org/downloads/>
+
+---
+
+## 2) Put `app.py` in a folder
+
+Example folder name:
+
+- `subreddit_finder`
+
+Open Terminal (or Command Prompt/PowerShell on Windows), then go to that folder.
+
+Example:
+
+```bash
+cd /path/to/subreddit_finder
+```
+
+---
+
+## 3) Create an isolated environment (recommended, safe)
+
+### macOS / Linux
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+### Windows (PowerShell)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### Windows (Command Prompt)
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate.bat
+```
+
+After activation, your terminal usually shows `(.venv)` at the start.
+
+---
+
+## 4) Install dependencies (required)
+
+Run:
+
+```bash
+pip install httpx pyarrow
+```
+
+Optional (better semantic expansion):
+
+```bash
+pip install nltk
+python -m nltk.downloader wordnet
+```
+
+---
+
+## 5) Start the app
+
+Run:
+
+```bash
+python app.py
+```
+
+If successful, terminal shows:
+
+```text
+Server running at http://0.0.0.0:8080
+```
+
+⚠️ **Important:** keep this terminal window open while using the app.
+
+---
+
+## 6) Open the website
+
+Open your browser and go to:
+
+- <http://localhost:8080>
+
+Type your keyword in the input box and click **Run**.
+
+---
+
+## API modes (easy explanation)
+
+This app supports 2 modes:
+
+1. **Public mode (free, no Reddit app needed)**
+   - Works without API keys
+   - Good for normal use/testing
+
+2. **OAuth mode (optional, better coverage)**
+   - Recommended if you want maximum reliability and NSFW coverage (if your account allows it)
+   - Requires Reddit app credentials
+
+If you do **nothing**, app runs in public mode automatically.
+
+---
+
+## Optional: OAuth setup (only if you want it)
+
+Create a Reddit app at <https://www.reddit.com/prefs/apps> (`script` type), then set:
 
 ```bash
 export REDDIT_CLIENT_ID="..."
@@ -30,59 +154,106 @@ export REDDIT_PASSWORD="..."
 export REDDIT_USER_AGENT="subreddit-finder-web/1.0 by <reddit_username>"
 ```
 
-If these are missing, app automatically falls back to **public** mode.
+Windows PowerShell version:
 
-## Safe performance behavior
+```powershell
+$env:REDDIT_CLIENT_ID="..."
+$env:REDDIT_CLIENT_SECRET="..."
+$env:REDDIT_USERNAME="..."
+$env:REDDIT_PASSWORD="..."
+$env:REDDIT_USER_AGENT="subreddit-finder-web/1.0 by <reddit_username>"
+```
 
-- Uses asynchronous requests with worker cap of **up to 10 cores/workers** (`min(os.cpu_count(), 10)`)
-- Prioritizes safe behavior with throttling + retry/backoff
-- Progress bar updates across phases: start, discovery, metrics, export
-- UI shows current mode (`public` or `oauth`)
+---
 
-## What it does
+## Troubleshooting (for your exact errors)
 
-1. Authenticates (OAuth when credentials exist, else public mode)
-2. Expands your keyword semantically (curated + optional WordNet)
-3. Discovers subreddits via `/subreddits/search` pagination
-4. Deduplicates by subreddit name
-5. Fetches subreddit metadata (`/r/{sub}/about`)
-6. Computes weekly contribution from `/r/{sub}/new` over last 7 days
-7. Ranks results
-8. Exports to `exports/`
+### Error A: `Missing dependency 'httpx'. Install it with: pip install httpx pyarrow`
 
-## Install dependencies
+Cause: dependencies were not installed in the current environment.
+
+Fix:
+
+1. Activate your virtual environment
+2. Run:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 pip install httpx pyarrow
 ```
 
-Optional semantic upgrade (WordNet):
+3. Start again:
 
 ```bash
-pip install nltk
-python -m nltk.downloader wordnet
+python app.py
 ```
 
-If your environment requires proxy settings:
+---
+
+### Error B: `This site can’t be reached` / `localhost refused to connect`
+
+Cause: server is not running, crashed, or wrong terminal/environment.
+
+Fix checklist:
+
+1. In terminal, run:
+
+```bash
+python app.py
+```
+
+2. Confirm you see:
+
+```text
+Server running at http://0.0.0.0:8080
+```
+
+3. Keep terminal open (do not close it)
+4. Open browser at <http://localhost:8080>
+5. If still failing, try:
+   - <http://127.0.0.1:8080>
+   - restart terminal and repeat steps 3–6 from this README
+
+---
+
+### Error C: `pip` cannot download packages (proxy/network)
+
+If you are behind corporate proxy/firewall, set:
 
 ```bash
 export HTTPS_PROXY="http://<proxy-host>:<proxy-port>"
 export HTTP_PROXY="http://<proxy-host>:<proxy-port>"
 ```
 
-## Run
+Then retry:
 
 ```bash
-python app.py
+pip install httpx pyarrow
 ```
 
-Then open:
+---
 
-- `http://localhost:8080`
+## Safety/performance defaults in this app
 
-## Output fields
+- Uses safe request throttling + retry/backoff
+- Uses up to 10 CPU workers max (safe cap)
+- Shows progress bar and phase while running
+
+---
+
+## Output file location
+
+Results are saved automatically into:
+
+- `exports/`
+
+Format:
+
+- CSV by default
+- switches to Parquet if file size is bigger than 20MB
+
+---
+
+## Output columns
 
 - subreddit_name
 - title

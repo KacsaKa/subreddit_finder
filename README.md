@@ -3,6 +3,7 @@
 Ez a verzió a "régi, stabil" egyfájlos appra épül, de a kért módosításokkal:
 
 - 10 kulcsszó egyszerre megadható UI-ban
+- plusz kompatibilitás: egyetlen `keyword` mezőben is adhatsz meg vesszővel vagy új sorral több kulcsszót
 - queue-alapú, alapból szekvenciális futás (`JOB_WORKERS=1`)
 - Apple Silicon külön launcher + uvloop támogatás
 - `/about`-only metrika (nincs weekly scan, nincs `/new` crawl)

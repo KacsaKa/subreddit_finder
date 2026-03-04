@@ -485,6 +485,35 @@ def _format_ts(ts: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
 
 
+def parse_submitted_keywords(payload: dict[str, list[str]]) -> list[str]:
+    values: list[str] = []
+
+    # legacy single field compatibility
+    raw_single = payload.get("keyword", [""])[0]
+    if raw_single:
+        for part in raw_single.replace(",", "\n").splitlines():
+            part = part.strip()
+            if part:
+                values.append(part)
+
+    # multi-input form fields
+    for i in range(1, 11):
+        kw = payload.get(f"keyword{i}", [""])[0].strip()
+        if kw:
+            values.append(kw)
+
+    # de-duplicate preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in values:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def page_template(content: str) -> bytes:
     inputs = "".join(
         f"<input type='text' name='keyword{i}' placeholder='Keyword {i} (e.g. housing)' style='display:block;margin:6px 0;' />"
@@ -507,6 +536,8 @@ def page_template(content: str) -> bytes:
     <body>
       <h1>Reddit Subreddit Discovery & Analytics</h1>
       <form method="POST" action="/search">
+        <p><b>Quick multi-run:</b> use the 10 boxes below or paste comma/newline separated list in the first box.</p>
+        <input type='text' name='keyword' placeholder='Optional list: housing, rent, mortgage' style='display:block;margin:6px 0;width:520px;' />
         {inputs}
         <button type="submit">Queue Jobs</button>
       </form>
@@ -609,11 +640,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length).decode("utf-8")
         payload = urllib.parse.parse_qs(body)
 
-        job_ids: list[str] = []
-        for i in range(1, 11):
-            kw = payload.get(f"keyword{i}", [""])[0].strip()
-            if kw:
-                job_ids.append(start_job(kw))
+        keywords = parse_submitted_keywords(payload)
+        job_ids = [start_job(kw) for kw in keywords]
 
         if not job_ids:
             self._html(page_template("<p>Please provide at least one keyword.</p>"), status=HTTPStatus.BAD_REQUEST)

@@ -8,6 +8,7 @@ import logging
 import os
 import platform
 import queue
+import re
 import threading
 import time
 import urllib.parse
@@ -64,7 +65,7 @@ class RedditClient:
 
     def __init__(self, creds: RedditCredentials, requests_per_second: float = 2.0) -> None:
         self.creds = creds
-        self.auth_mode = all([creds.client_id, creds.client_secret, creds.username, creds.password])
+        self.auth_mode = bool(creds.client_id and creds.client_secret)
         try:
             import httpx  # type: ignore
         except Exception as exc:
@@ -81,13 +82,17 @@ class RedditClient:
         await self._client.aclose()
 
     async def _authenticate(self) -> None:
-        response = await self._client.post(
-            self.TOKEN_URL,
-            data={
+        data = {"grant_type": "client_credentials"}
+        if self.creds.username and self.creds.password:
+            data = {
                 "grant_type": "password",
                 "username": self.creds.username,
                 "password": self.creds.password,
-            },
+            }
+
+        response = await self._client.post(
+            self.TOKEN_URL,
+            data=data,
             auth=(self.creds.client_id, self.creds.client_secret),
             headers={"User-Agent": self.creds.user_agent},
         )
@@ -101,6 +106,24 @@ class RedditClient:
             return
         if not self._token or time.time() >= self._token_expires_at:
             await self._authenticate()
+
+    async def discover_from_public_html(self, term: str) -> list[str]:
+        """Fallback when public JSON search gets blocked."""
+        headers = {"User-Agent": self.creds.user_agent}
+        names: set[str] = set()
+        for base in self._public_bases:
+            try:
+                url = f"{base}/subreddits/search"
+                resp = await self._client.get(url, params={"q": term}, headers=headers)
+                if resp.status_code >= 400:
+                    continue
+                for m in re.finditer(r"/r/([A-Za-z0-9_]+)/", resp.text):
+                    names.add(m.group(1))
+                if names:
+                    break
+            except Exception:
+                continue
+        return sorted(names)
 
     async def request(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         async with self._lock:
@@ -176,7 +199,7 @@ def expand_keyword(keyword: str, min_terms: int = 8, max_terms: int = 12) -> lis
 async def discover_subreddits(
     client: RedditClient,
     terms: list[str],
-    per_term_limit: int = 200,
+    per_term_limit: int = 100,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> list[str]:
     discovered: dict[str, str] = {}
@@ -211,7 +234,11 @@ async def discover_subreddits(
                             },
                         )
                     except RedditAPIError as err2:
-                        logger.warning("Public mode blocked for term '%s' (%s). Skipping term.", term, err2)
+                        logger.warning("JSON search still blocked for '%s' (%s). Trying HTML fallback.", term, err2)
+                        names = await client.discover_from_public_html(term)
+                        if names:
+                            for n in names:
+                                discovered.setdefault(n.lower(), n)
                         break
                 else:
                     raise
@@ -360,6 +387,9 @@ async def run_pipeline(keyword: str, job_id: str) -> tuple[list[dict[str, Any]],
             update_job(job_id, phase="discovering subreddits", progress=min(pct, 35), done=done, total=total)
 
         names = await discover_subreddits(client, terms, progress_cb=discovery_progress)
+        if not names:
+            mode_msg = "OAuth app credentials recommended" if not client.auth_mode else "Try a broader keyword"
+            raise RuntimeError(f"No subreddits discovered for '{keyword}'. Public search likely blocked (403). {mode_msg}.")
         update_job(job_id, phase="collecting metrics", progress=35, done=0, total=len(names))
 
         def metrics_progress(done: int, total: int) -> None:

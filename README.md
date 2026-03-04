@@ -92,7 +92,8 @@ Nyisd meg: <http://localhost:8080>
 ## Környezeti változók
 
 - `JOB_WORKERS` → `1` (default) vagy `2`
-- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (OAuth-hoz)
+- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` (OAuth app-only/client_credentials is működik)
+- `REDDIT_USERNAME`, `REDDIT_PASSWORD` opcionális (user-context)
 
 Ha nincs OAuth, az app public módban fut.
 
@@ -101,7 +102,7 @@ Ha nincs OAuth, az app public módban fut.
 ## Tippek a stabil futáshoz
 
 - Public módban maradj `JOB_WORKERS=1`-en.
-- Public 403 esetén a keresés megpróbálja a `www.reddit.com` mellett az `old.reddit.com` hostot is, és egyszer relaxált (`include_over_18` nélkül) kereséssel is próbálkozik.
+- Public 403 esetén a keresés megpróbálja a `www.reddit.com` mellett az `old.reddit.com` hostot is, egyszer relaxált (`include_over_18` nélkül) JSON kereséssel, majd végső fallbackként HTML keresésből is próbál subreddit neveket gyűjteni.
 - Ha sok 403-at látsz, válts OAuth módra.
 - Ha sok kulcsszót adsz meg, hagyd queue-ban lefutni (babysitting nélkül).
 

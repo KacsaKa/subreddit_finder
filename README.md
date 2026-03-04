@@ -78,12 +78,21 @@ Mostantól **két optimalizált indító script** van:
   ```bash
   python app_apple_silicon.py
   ```
+  Ez a profil a teljesítmény-magokra (performance cores) optimalizálja a worker számot, és ha elérhető, `uvloop`-ot használ.
 - Windows gépen:
   ```powershell
   python app_windows.py
   ```
 
 Ha ezek helyett `app.py`-t indítod, akkor általános profil fut.
+
+---
+
+## 4.1) Apple Silicon sebességhangolás
+
+- A rendszer megpróbálja automatikusan kiolvasni a performance core számot (`hw.perflevel0.physicalcpu`).
+- Ebből számolja a worker limitet (I/O workload miatt tipikusan `perf_cores * 2`, max 12).
+- A request rate budgetet a státusz oldalon is látod (`Request rate budget`).
 
 ---
 

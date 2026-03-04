@@ -7,7 +7,9 @@ import datetime as dt
 import html
 import logging
 import os
+import platform
 import random
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -101,7 +103,8 @@ class RedditClient:
             import httpx  # type: ignore
         except Exception as exc:
             raise RuntimeError("Missing dependency 'httpx'. Install it with: pip install httpx pyarrow") from exc
-        self._client = httpx.AsyncClient(timeout=30.0)
+        limits = httpx.Limits(max_connections=240, max_keepalive_connections=80)
+        self._client = httpx.AsyncClient(timeout=30.0, limits=limits)
         self._token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = asyncio.Lock()
@@ -402,9 +405,11 @@ async def collect_metrics(
         nonlocal done
         async with sem:
             try:
-                about_payload = await client.request(f"/r/{name}/about")
+                about_payload, weekly = await asyncio.gather(
+                    client.request(f"/r/{name}/about"),
+                    compute_weekly_contribution(client, name),
+                )
                 about = about_payload.get("data", {})
-                weekly = await compute_weekly_contribution(client, name)
             except Exception as exc:
                 logger.warning("Failed for %s: %s", name, exc)
                 result = None
@@ -486,11 +491,30 @@ def get_profile() -> Literal["default", "apple_silicon", "windows"]:
     return "default"
 
 
+def detect_apple_performance_cores() -> int | None:
+    if platform.system() != "Darwin":
+        return None
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.perflevel0.physicalcpu"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        value = int(result.stdout.strip())
+        return value if value > 0 else None
+    except Exception:
+        return None
+
+
 def compute_safe_concurrency() -> int:
     cpu_count = os.cpu_count() or 1
     profile = get_profile()
     if profile == "apple_silicon":
-        return max(4, min(12, cpu_count))
+        perf_cores = detect_apple_performance_cores()
+        if perf_cores:
+            return max(6, min(12, perf_cores * 2))
+        return max(6, min(12, cpu_count))
     if profile == "windows":
         return max(4, min(12, cpu_count - 1 if cpu_count > 4 else cpu_count))
     return max(3, min(12, cpu_count))
@@ -499,16 +523,20 @@ def compute_safe_concurrency() -> int:
 def make_client(creds: RedditCredentials) -> RedditClient:
     allow_public = os.getenv("ALLOW_PUBLIC_MODE", "1") == "1"
     profile = get_profile()
-    base_rps = 2.5
+
+    uses_oauth = bool(creds.client_id and creds.client_secret)
     if profile == "apple_silicon":
-        base_rps = 3.2
+        base_rps = 6.0 if uses_oauth else 3.8
     elif profile == "windows":
-        base_rps = 2.8
+        base_rps = 4.5 if uses_oauth else 3.0
+    else:
+        base_rps = 3.5 if uses_oauth else 2.5
+
     return RedditClient(
         creds,
         allow_public_mode=allow_public,
         requests_per_second=base_rps,
-        endpoint_rps={"search": max(0.8, base_rps * 0.45), "default": base_rps},
+        endpoint_rps={"search": max(1.0, base_rps * 0.42), "default": base_rps},
     )
 
 
@@ -531,6 +559,7 @@ async def run_pipeline(keyword: str, job_id: str) -> tuple[list[dict[str, Any]],
         progress=5,
         auth_mode=client.auth_mode,
         profile=get_profile(),
+        request_rate=client._rate_limiter.default_rps,
     )
     try:
         terms = expand_keyword(keyword)
@@ -594,12 +623,14 @@ def progress_widget(job: dict[str, Any]) -> str:
     workers = int(job.get("cpu_workers", 0))
     auth_mode = html.escape(str(job.get("auth_mode", "unknown")))
     profile = html.escape(str(job.get("profile", "default")))
+    request_rate = float(job.get("request_rate", 0.0))
 
     return f"""
     <p><b>Mode:</b> {auth_mode}</p>
     <p><b>Optimization profile:</b> {profile}</p>
     <p><b>Phase:</b> {phase}</p>
     <p><b>CPU worker limit:</b> {workers} (safe cap: max 12)</p>
+    <p><b>Request rate budget:</b> {request_rate:.2f} req/s</p>
     <div style='background:#e9ecef;border-radius:8px;overflow:hidden;height:22px;max-width:560px;'>
       <div style='height:22px;width:{progress}%;background:#2f9e44;color:white;text-align:center;line-height:22px;font-size:12px;'>
         {progress}%

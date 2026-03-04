@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Apple Silicon optimized launcher for subreddit finder."""
 
+import importlib
+import importlib.util
 import os
 
 os.environ.setdefault("APP_PROFILE", "apple_silicon")
-os.environ.setdefault("UVLOOP_NO_WARN", "1")
 
-try:
-    import uvloop  # type: ignore
-
+if importlib.util.find_spec("uvloop") is not None:
+    uvloop = importlib.import_module("uvloop")
     uvloop.install()
-except Exception:
-    pass
 
 from app import run_server
 

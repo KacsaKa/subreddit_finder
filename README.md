@@ -1,13 +1,16 @@
-# Subreddit Finder – High Throughput Edition
+# Subreddit Finder (updated from the original v1 script)
 
-Ez a verzió egy **több-jobos**, nagy áteresztésű scraper rendszer:
+Ez a verzió a "régi, stabil" egyfájlos appra épül, de a kért módosításokkal:
 
-- akár **50+ keyword** egyszerre queue-ba tehető,
-- jobonként külön státusz/progress/output,
-- közös globális limiter védi az összes kérést,
-- csak az `/about` endpointot használja metrikához (nincs post/new scrape).
+- 10 kulcsszó egyszerre megadható UI-ban
+- queue-alapú, alapból szekvenciális futás (`JOB_WORKERS=1`)
+- Apple Silicon külön launcher + uvloop támogatás
+- `/about`-only metrika (nincs weekly scan, nincs `/new` crawl)
+- export séma pontosan 5 oszlop
 
-## Kötelező output séma (pontosan ez)
+## Kötelező export oszlopok
+
+A CSV/Parquet ezekkel készül:
 
 - `subreddit_name`
 - `subreddit_url`
@@ -15,27 +18,45 @@ Ez a verzió egy **több-jobos**, nagy áteresztésű scraper rendszer:
 - `subscribers`
 - `active_users`
 
-## Fő architektúra
+## Mi változott a régi v1-hez képest
 
-1. **Global shared rate limiter**
-   - minden job ugyanazt a request budgetet használja.
-2. **JobManager + queue + worker pool**
-   - job státuszok: `queued`, `running`, `done`, `error`.
-3. **Streaming pipeline jobonként**
-   - discovery producer → metrics consumer(ek) → streamelt CSV writer.
-4. **Közös HTTP kapcsolatpool**
-   - jobb keepalive és throughput.
+1. **Weekly contribution teljesen eltávolítva**
+   - nincs `compute_weekly_contribution()`
+   - nincs `/r/{sub}/new` lapozás
+   - subredditenként 1 API hívás: `/r/{sub}/about`
+
+2. **Subreddit URL bekerült az outputba**
+   - `about["url"]` alapján teljes URL képzés: `https://www.reddit.com/...`
+
+3. **UI: 10 keyword mező**
+   - `keyword1 ... keyword10`
+   - egy submit több jobot queue-ba tesz
+
+4. **Queue + worker modell**
+   - nincs több thread-per-job burst
+   - alapértelmezés: `JOB_WORKERS=1` (biztonságos)
+   - opcionális: `JOB_WORKERS=2`
+
+5. **/jobs dashboard**
+   - státusz: `queued/running/done/error`
+   - keyword
+   - created/started/finished időbélyeg
+   - output path, részletek link
+
+6. **Public mód védelmi beállítások**
+   - kevesebb retry
+   - enyhébb discovery terhelés (`per_term_limit=200`)
+   - kisebb keyword expansion tartomány (`8..12`)
 
 ---
 
-## Indítás
+## Telepítés
 
 ### macOS / Linux
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install httpx pyarrow
-python app.py
 ```
 
 ### Windows PowerShell
@@ -43,81 +64,43 @@ python app.py
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install httpx pyarrow
+```
+
+---
+
+## Futtatás
+
+### Általános
+```bash
 python app.py
 ```
 
-Alap URL: <http://localhost:8080>
+### Apple Silicon (ajánlott)
+```bash
+python app_apple_silicon.py
+```
+
+### Windows
+```powershell
+python app_windows.py
+```
+
+Nyisd meg: <http://localhost:8080>
 
 ---
 
-## UI funkciók
+## Környezeti változók
 
-### `/`
-- 5 gyors keyword mező (`keyword1...keyword5`)
-- bulk textarea (50+ keyword, soronként)
+- `JOB_WORKERS` → `1` (default) vagy `2`
+- `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USERNAME`, `REDDIT_PASSWORD`, `REDDIT_USER_AGENT` (OAuth-hoz)
 
-### `/jobs`
-Dashboard oszlopok:
-- Keyword
-- Status
-- Phase
-- Progress
-- Done/Total
-- Running since
-- Elapsed
-- ETA
-- Linkek (`view`, `download`)
-
-### `/job?id=...`
-Részletes nézet:
-- current subreddit
-- current discovery term
-- 403/429 telemetry endpointonként
-- top preview táblázat kattintható `subreddit_url` linkkel
+Ha nincs OAuth, az app public módban fut.
 
 ---
 
-## Bulk API
+## Tippek a stabil futáshoz
 
-### `POST /jobs/bulk`
-Támogatott formátumok:
-- `text/plain` vagy form mező (`keywords`) newline-separated
-- `application/json` tömb: `{"keywords": [...]} ` helyett közvetlen JSON array (`["housing", "rent"]`)
+- Public módban maradj `JOB_WORKERS=1`-en.
+- Ha sok 403-at látsz, válts OAuth módra.
+- Ha sok kulcsszót adsz meg, hagyd queue-ban lefutni (babysitting nélkül).
 
----
-
-## Teljesítményhangolás
-
-A rendszer automatikusan auth mód alapján választ tuningot:
-
-- **Public mód**: konzervatívabb global RPS + kisebb worker szám
-- **OAuth mód**: magasabb throughput (több párhuzamos job és worker)
-
-Fontos: ez I/O-bound workload, a gyorsulás kulcsa a concurrency + connection reuse + global limiter.
-
----
-
-## Timeout és stabilitás
-
-- subreddit-szintű hard timeout: `SUBREDDIT_TIMEOUT_SECONDS` (default `75`)
-- timeout esetén skip, job nem fagy be
-- 403/429 warning logok megmaradnak diagnosztikára
-
----
-
-## Fájlnevek és export
-
-Minden job külön fájlba ír:
-
-- `exports/subreddit_results_{keyword}_{job_id}.csv`
-
-Nagy fájl esetén opcionálisan készülhet parquet is.
-
----
-
-## Platform launcherek
-
-- Apple Silicon: `python app_apple_silicon.py`
-- Windows: `python app_windows.py`
-
-Ezek a launcherek megtartva maradtak.

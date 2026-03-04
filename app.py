@@ -103,7 +103,7 @@ class RedditClient:
         self._token: str | None = None
         self._token_expires_at = 0.0
         self._token_lock = asyncio.Lock()
-        self._public_bases = ["https://www.reddit.com", "https://old.reddit.com"]
+        self._public_bases = ["https://www.reddit.com"]
         self._rate_limiter = AsyncRateLimiter(default_rps=requests_per_second, endpoint_rps=endpoint_rps)
         self.telemetry: dict[str, dict[str, int]] = {}
 

@@ -232,6 +232,21 @@ pip install httpx pyarrow
 
 ---
 
+
+### Error D: `403` on `/subreddits/search` in public mode
+
+Cause: Reddit sometimes blocks anonymous search traffic from certain networks/IPs.
+
+Fix options (best to worst):
+
+1. Use OAuth mode (recommended): set Reddit credentials, then run again
+2. Try again later (temporary blocks can clear)
+3. Change network/VPN/proxy settings if your current network is restricted
+
+Good news: the app now tries both `www.reddit.com` and `old.reddit.com` in public mode before failing.
+
+---
+
 ## Safety/performance defaults in this app
 
 - Uses safe request throttling + retry/backoff

@@ -75,7 +75,7 @@ class RedditClient:
             raise RuntimeError("Missing dependency 'httpx'. Install it with: pip install httpx pyarrow") from exc
         self._client = httpx.AsyncClient(timeout=30.0)
         self._token: str | None = None
-        self._public_base = "https://www.reddit.com"
+        self._public_bases = ["https://www.reddit.com", "https://old.reddit.com"]
         self._token_expires_at = 0.0
         self._last_request = 0.0
         self._rps = requests_per_second
@@ -114,22 +114,41 @@ class RedditClient:
             if elapsed < min_delay:
                 await asyncio.sleep(min_delay - elapsed)
 
-            headers = {"User-Agent": self.creds.user_agent}
+            headers = {"User-Agent": self.creds.user_agent, "Accept": "application/json"}
             req_params = dict(params or {})
             req_params.setdefault("raw_json", 1)
-            url = f"{self.BASE_URL}{path}" if self.auth_mode else f"{self._public_base}{path}.json"
             if self.auth_mode:
+                req_urls = [f"{self.BASE_URL}{path}"]
                 headers["Authorization"] = f"bearer {self._token}"
+            else:
+                req_urls = [f"{base}{path}.json" for base in self._public_bases]
 
+            last_error: str | None = None
             for attempt in range(1, 6):
-                response = await self._client.get(url, params=req_params, headers=headers)
-                self._last_request = time.time()
-                if response.status_code in {429, 500, 502, 503, 504} and attempt < 5:
+                for url in req_urls:
+                    response = await self._client.get(url, params=req_params, headers=headers)
+                    self._last_request = time.time()
+
+                    if response.status_code in {429, 500, 502, 503, 504}:
+                        last_error = f"{response.status_code} transient error"
+                        continue
+
+                    if response.status_code == 403 and not self.auth_mode:
+                        last_error = f"403 from {url}"
+                        continue
+
+                    if response.status_code >= 400:
+                        raise RedditAPIError(f"{path} failed: {response.status_code} {response.text[:300]}")
+
+                    return response.json()
+
+                if attempt < 5:
                     await asyncio.sleep(min(2**attempt, 10))
-                    continue
-                if response.status_code >= 400:
-                    raise RedditAPIError(f"{path} failed: {response.status_code} {response.text[:300]}")
-                return response.json()
+
+            raise RedditAPIError(
+                f"{path} failed in public mode after retries ({last_error}). "
+                "Reddit may block anonymous search; set OAuth env vars for reliable access."
+            )
 
         raise RedditAPIError(f"{path} failed repeatedly")
 
@@ -188,10 +207,23 @@ async def discover_subreddits(
         after: str | None = None
         fetched = 0
         while True:
-            payload = await client.request(
-                "/subreddits/search",
-                params={"q": term, "type": "sr", "sort": "relevance", "limit": 100, "after": after},
-            )
+            try:
+                payload = await client.request(
+                    "/subreddits/search",
+                    params={
+                        "q": term,
+                        "type": "sr",
+                        "sort": "relevance",
+                        "limit": 100,
+                        "after": after,
+                        "include_over_18": "on",
+                    },
+                )
+            except RedditAPIError as err:
+                if not client.auth_mode and "403" in str(err):
+                    logger.warning("Public mode blocked for term '%s' (%s). Skipping term.", term, err)
+                    break
+                raise
             data = payload.get("data", {})
             children: list[dict[str, Any]] = data.get("children", [])
             if not children:

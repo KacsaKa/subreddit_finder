@@ -90,7 +90,7 @@ class RedditClient:
     def __init__(
         self,
         creds: RedditCredentials,
-        allow_public_mode: bool = False,
+        allow_public_mode: bool = True,
         requests_per_second: float = 2.5,
         endpoint_rps: dict[str, float] | None = None,
     ) -> None:
@@ -216,11 +216,6 @@ class RedditClient:
             req_urls = [f"{self.BASE_URL}{path}"]
         else:
             req_urls = [f"{base}{path}.json" for base in self._public_bases]
-
-        if self.auth_mode == "public" and not self.allow_public_mode:
-            raise RuntimeError(
-                "Public mode is disabled by default. Provide OAuth credentials or set ALLOW_PUBLIC_MODE=1 explicitly."
-            )
 
         last_error: str | None = None
         for attempt in range(1, 8):
@@ -502,7 +497,7 @@ def compute_safe_concurrency() -> int:
 
 
 def make_client(creds: RedditCredentials) -> RedditClient:
-    allow_public = os.getenv("ALLOW_PUBLIC_MODE", "0") == "1"
+    allow_public = os.getenv("ALLOW_PUBLIC_MODE", "1") == "1"
     profile = get_profile()
     base_rps = 2.5
     if profile == "apple_silicon":

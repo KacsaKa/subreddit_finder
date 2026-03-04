@@ -2,10 +2,10 @@
 
 Ez a projekt egy egyszerű weboldalt indít el, ahol **egy mezőbe beírod a kulcsszót**, és a háttérben lefut az adatgyűjtés.
 
-## Fontos változás (stabil működés miatt)
-- Alapértelmezésben most **OAuth módot** használunk (`oauth.reddit.com`).
-- A **public (auth nélküli) mód tiltva van alapból**, csak külön engedéllyel kapcsolható be (`ALLOW_PUBLIC_MODE=1`).
-- Ez azért kell, mert tömeges lekérésnél public módban gyakori a 403 tiltás.
+## Fontos változás
+- Alapértelmezésben most **public mód** fut automatikusan (OAuth nélkül is).
+- Ha megadod a Reddit OAuth adatokat, az app automatikusan OAuth módra vált (`oauth_app` vagy `oauth_user`).
+- Cél: OAuth nélkül is induljon "seamlessly", de OAuth módban stabilabb és megbízhatóbb marad nagy terhelésnél.
 
 ---
 
@@ -18,7 +18,7 @@ Ez a projekt egy egyszerű weboldalt indít el, ahol **egy mezőbe beírod a kul
    - `REDDIT_CLIENT_ID`
    - `REDDIT_CLIENT_SECRET`
 
-> Ha nincs `client_id + client_secret`, az app nem fog stabilan futni tömeges lekérésnél.
+> OAuth adatok nélkül is fut (public), de sok 403 esetén érdemes OAuth-ra váltani a stabilitásért.
 
 ---
 
@@ -102,19 +102,25 @@ Ha fut a munka:
 
 ---
 
-## 6) Public mód (csak debug/fallback)
+## 6) Public mód (alapértelmezett)
 
-Csak akkor engedélyezd, ha tudod mit csinálsz:
+Nem kell külön beállítás, automatikusan működik:
+
+```bash
+python app.py
+```
+
+Ha mégis szeretnéd kikapcsolni a public módot (csak OAuth engedélyezése):
 
 ### macOS / Linux
 ```bash
-export ALLOW_PUBLIC_MODE=1
+export ALLOW_PUBLIC_MODE=0
 python app.py
 ```
 
 ### Windows PowerShell
 ```powershell
-$env:ALLOW_PUBLIC_MODE="1"
+$env:ALLOW_PUBLIC_MODE="0"
 python app.py
 ```
 

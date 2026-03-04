@@ -8,13 +8,19 @@ Single-file application (`app.py`) with a simple browser UI:
 - results table when complete
 - export automatically to CSV (or Parquet when CSV exceeds 20MB)
 
-## Do you need a Reddit API account?
+## Reddit API setup (free/public mode supported)
 
-Yes. You must create a Reddit app and provide credentials via environment variables.
+You can run this app in two modes:
 
-1. Go to: <https://www.reddit.com/prefs/apps>
-2. Create app type: **script**
-3. Set:
+1. **Public free mode (no Reddit app required)**
+   - The app uses Reddit's public JSON API endpoints (`www.reddit.com/...json`)
+   - No `REDDIT_CLIENT_ID` or `REDDIT_CLIENT_SECRET` needed
+   - Good for discovery/testing
+
+2. **OAuth mode (recommended for full access)**
+   - Required for best reliability and broader access (including NSFW communities if your account is allowed)
+   - Create a Reddit app at <https://www.reddit.com/prefs/apps> (type: `script`)
+   - Set:
 
 ```bash
 export REDDIT_CLIENT_ID="..."
@@ -24,17 +30,18 @@ export REDDIT_PASSWORD="..."
 export REDDIT_USER_AGENT="subreddit-finder-web/1.0 by <reddit_username>"
 ```
 
-Without these values, the job cannot authenticate and will fail.
+If these are missing, app automatically falls back to **public** mode.
 
 ## Safe performance behavior
 
-- Uses asynchronous requests with a CPU worker cap of **up to 10 workers** (`min(os.cpu_count(), 10)`)
-- Still prioritizes safe Reddit usage with throttling + retry/backoff
-- Progress bar updates across phases: expansion, discovery, metrics, export
+- Uses asynchronous requests with worker cap of **up to 10 cores/workers** (`min(os.cpu_count(), 10)`)
+- Prioritizes safe behavior with throttling + retry/backoff
+- Progress bar updates across phases: start, discovery, metrics, export
+- UI shows current mode (`public` or `oauth`)
 
 ## What it does
 
-1. OAuth-authenticates with Reddit
+1. Authenticates (OAuth when credentials exist, else public mode)
 2. Expands your keyword semantically (curated + optional WordNet)
 3. Discovers subreddits via `/subreddits/search` pagination
 4. Deduplicates by subreddit name

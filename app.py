@@ -51,11 +51,11 @@ CURATED_SYNONYMS = {
 
 @dataclass(slots=True)
 class RedditCredentials:
-    client_id: str
-    client_secret: str
-    username: str
-    password: str
-    user_agent: str
+    client_id: str = ""
+    client_secret: str = ""
+    username: str = ""
+    password: str = ""
+    user_agent: str = "subreddit-finder-web/1.0"
 
 
 class RedditAPIError(RuntimeError):
@@ -68,12 +68,14 @@ class RedditClient:
 
     def __init__(self, creds: RedditCredentials, requests_per_second: float = 2.0) -> None:
         self.creds = creds
+        self.auth_mode = all([creds.client_id, creds.client_secret, creds.username, creds.password])
         try:
             import httpx  # type: ignore
         except Exception as exc:
             raise RuntimeError("Missing dependency 'httpx'. Install it with: pip install httpx pyarrow") from exc
         self._client = httpx.AsyncClient(timeout=30.0)
         self._token: str | None = None
+        self._public_base = "https://www.reddit.com"
         self._token_expires_at = 0.0
         self._last_request = 0.0
         self._rps = requests_per_second
@@ -99,6 +101,8 @@ class RedditClient:
         self._token_expires_at = time.time() + int(payload.get("expires_in", 3600)) - 60
 
     async def _ensure_token(self) -> None:
+        if not self.auth_mode:
+            return
         if not self._token or time.time() >= self._token_expires_at:
             await self._authenticate()
 
@@ -110,9 +114,15 @@ class RedditClient:
             if elapsed < min_delay:
                 await asyncio.sleep(min_delay - elapsed)
 
-            headers = {"Authorization": f"bearer {self._token}", "User-Agent": self.creds.user_agent}
+            headers = {"User-Agent": self.creds.user_agent}
+            req_params = dict(params or {})
+            req_params.setdefault("raw_json", 1)
+            url = f"{self.BASE_URL}{path}" if self.auth_mode else f"{self._public_base}{path}.json"
+            if self.auth_mode:
+                headers["Authorization"] = f"bearer {self._token}"
+
             for attempt in range(1, 6):
-                response = await self._client.get(f"{self.BASE_URL}{path}", params=params or {}, headers=headers)
+                response = await self._client.get(url, params=req_params, headers=headers)
                 self._last_request = time.time()
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < 5:
                     await asyncio.sleep(min(2**attempt, 10))
@@ -338,23 +348,11 @@ async def run_pipeline(keyword: str, job_id: str) -> tuple[list[dict[str, Any]],
         password=os.getenv("REDDIT_PASSWORD", ""),
         user_agent=os.getenv("REDDIT_USER_AGENT", "subreddit-finder-web/1.0"),
     )
-    missing = [
-        name
-        for name, val in {
-            "REDDIT_CLIENT_ID": creds.client_id,
-            "REDDIT_CLIENT_SECRET": creds.client_secret,
-            "REDDIT_USERNAME": creds.username,
-            "REDDIT_PASSWORD": creds.password,
-        }.items()
-        if not val
-    ]
-    if missing:
-        raise RuntimeError("Missing env vars: " + ", ".join(missing))
 
     concurrency = compute_safe_concurrency()
-    update_job(job_id, cpu_workers=concurrency, phase="expansion", progress=5)
-
     client = RedditClient(creds)
+    mode = "oauth" if client.auth_mode else "public"
+    update_job(job_id, cpu_workers=concurrency, phase=f"starting ({mode} mode)", progress=5, auth_mode=mode)
     try:
         terms = expand_keyword(keyword)
 
@@ -393,6 +391,7 @@ def start_job(keyword: str) -> str:
             "done": 0,
             "total": 0,
             "cpu_workers": 0,
+            "auth_mode": "public",
         }
 
     def target() -> None:
@@ -412,8 +411,10 @@ def progress_widget(job: dict[str, Any]) -> str:
     done = int(job.get("done", 0))
     total = int(job.get("total", 0))
     workers = int(job.get("cpu_workers", 0))
+    auth_mode = html.escape(str(job.get("auth_mode", "public")))
 
     return f"""
+    <p><b>Mode:</b> {auth_mode}</p>
     <p><b>Phase:</b> {phase}</p>
     <p><b>CPU worker limit:</b> {workers} (safe cap: max 10)</p>
     <div style='background:#e9ecef;border-radius:8px;overflow:hidden;height:22px;max-width:560px;'>

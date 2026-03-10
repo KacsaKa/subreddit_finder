@@ -10,6 +10,31 @@ A script célja, hogy gyorsan előállíts egy elemzésre kész adatfájlt pl.:
 
 ---
 
+
+## 0) Letöltés GitHub-ról (ZIP vagy egyedi fájl)
+
+Ha azt szeretnéd, hogy a repóból **közvetlenül le tudj tölteni fájlokat**, használd ezeket:
+
+### A) Teljes projekt letöltése ZIP-ként
+1. Nyisd meg a repót GitHubon.
+2. Kattints a **Code** gombra.
+3. Válaszd a **Download ZIP** opciót.
+
+### B) Csak egy fájl letöltése (pl. `scrape_reddit_posts.py`)
+1. Nyisd meg a fájlt GitHub felületen.
+2. Kattints a **Raw** gombra.
+3. A böngészőben: **Save as...**
+
+### C) Repo klónozása
+```bash
+git clone <A_TE_REPO_URL-ED>
+cd subreddit_finder
+```
+
+> Ha szeretnéd, hogy a futás után generált `reddit_posts.csv` is GitHubról letölthető legyen, commitold és pushold azt a fájlt is a repóba, vagy használj Release/Artifact feltöltést.
+
+---
+
 ## 1) Mit csinál a script pontosan?
 
 A `scrape_reddit_posts.py`:
@@ -34,14 +59,14 @@ Kötelező request header:
 
 ### Függőségek
 ```bash
-pip install requests pandas openpyxl
+pip install -r requirements.txt
 ```
 
 Ha virtuális környezetet használsz:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install requests pandas openpyxl
+pip install -r requirements.txt
 ```
 
 ---
@@ -158,7 +183,7 @@ Duplikációk ellen:
 ### 1) `ModuleNotFoundError: No module named 'pandas'`
 Telepítsd a függőségeket:
 ```bash
-pip install pandas openpyxl requests
+pip install -r requirements.txt
 ```
 
 ### 2) Üres CSV jön létre
@@ -177,7 +202,7 @@ Ellenőrizd:
 ## 8) Rövid gyorsstart (copy-paste)
 
 ```bash
-pip install requests pandas openpyxl
+pip install -r requirements.txt
 python scrape_reddit_posts.py --input subreddits.xlsx --max-pages 3 --request-delay 1.5
 ```
 

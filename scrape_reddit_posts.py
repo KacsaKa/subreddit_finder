@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import platform
 import re
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -203,10 +206,10 @@ def compute_word_count(title: str, selftext: str) -> int:
     return len(text.split()) if text else 0
 
 
-def transform_post(post: dict, now: datetime) -> dict:
+def transform_post(post: dict, now_ts: float) -> dict:
     created_utc = post.get("created_utc")
     created_ts = float(created_utc) if created_utc else 0.0
-    age_days = max((now.timestamp() - created_ts) / 86400, 0)
+    age_days = max((now_ts - created_ts) / 86400, 0)
 
     title = post.get("title") or ""
     selftext = post.get("selftext") or ""
@@ -242,6 +245,11 @@ def transform_post(post: dict, now: datetime) -> dict:
     }
 
 
+def transform_post_worker(payload: tuple[dict, float]) -> dict:
+    post, now_ts = payload
+    return transform_post(post, now_ts)
+
+
 def collect_feed_urls(input_df: pd.DataFrame) -> list[str]:
     urls: list[str] = []
     for _, row in input_df.iterrows():
@@ -249,7 +257,33 @@ def collect_feed_urls(input_df: pd.DataFrame) -> list[str]:
     return urls
 
 
-def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: float) -> None:
+def auto_cpu_workers() -> int:
+    cores = os.cpu_count() or 1
+    if platform.system() == "Darwin" and platform.machine().lower() in {"arm64", "aarch64"}:
+        return max(cores, 1)
+    return max(cores - 1, 1)
+
+
+def transform_posts_parallel(unique_posts: list[dict], now_ts: float, cpu_workers: int) -> list[dict]:
+    if not unique_posts:
+        return []
+
+    if cpu_workers <= 1 or len(unique_posts) < 200:
+        return [transform_post(post, now_ts) for post in unique_posts]
+
+    payloads = [(post, now_ts) for post in unique_posts]
+    chunk_size = max(25, len(payloads) // (cpu_workers * 4))
+    with ProcessPoolExecutor(max_workers=cpu_workers) as executor:
+        return list(executor.map(transform_post_worker, payloads, chunksize=chunk_size))
+
+
+def scrape(
+    input_file: Path,
+    output_file: Path,
+    max_pages: int,
+    request_delay: float,
+    cpu_workers: int,
+) -> None:
     df = pd.read_excel(input_file)
     feed_urls = collect_feed_urls(df)
 
@@ -257,9 +291,7 @@ def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: f
     session = requests.Session()
     session.headers.update(headers)
 
-    all_rows: list[dict] = []
-    seen_ids: set[str] = set()
-    now = datetime.now(tz=timezone.utc)
+    unique_posts_by_id: dict[str, dict] = {}
 
     progress = ProgressBar(total=max(len(feed_urls) * max_pages, 1))
     pacer = RequestPacer(min_interval_seconds=request_delay)
@@ -280,12 +312,10 @@ def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: f
                 break
 
             for post in result.posts:
-                transformed = transform_post(post, now)
-                post_id = transformed.get("id")
-                if not post_id or post_id in seen_ids:
+                post_id = post.get("id")
+                if not post_id or post_id in unique_posts_by_id:
                     continue
-                seen_ids.add(post_id)
-                all_rows.append(transformed)
+                unique_posts_by_id[post_id] = post
 
             if not result.next_after:
                 break
@@ -293,6 +323,11 @@ def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: f
             after = result.next_after
 
     progress.finish()
+
+    now_ts = datetime.now(tz=timezone.utc).timestamp()
+    unique_posts = list(unique_posts_by_id.values())
+    logging.info("Transforming %s unique posts with cpu_workers=%s", len(unique_posts), cpu_workers)
+    all_rows = transform_posts_parallel(unique_posts=unique_posts, now_ts=now_ts, cpu_workers=cpu_workers)
 
     if not all_rows:
         logging.warning("No posts were collected. Writing empty output CSV.")
@@ -329,6 +364,12 @@ def parse_args() -> argparse.Namespace:
         default=1.5,
         help="Minimum delay in seconds between all HTTP requests",
     )
+    parser.add_argument(
+        "--cpu-workers",
+        type=int,
+        default=0,
+        help="CPU worker processes for post transformation (0 = auto, Apple Silicon uses all cores)",
+    )
     return parser.parse_args()
 
 
@@ -338,6 +379,10 @@ def main() -> None:
 
     if args.max_pages < 1:
         raise ValueError("--max-pages must be at least 1")
+
+    cpu_workers = auto_cpu_workers() if args.cpu_workers <= 0 else args.cpu_workers
+    if cpu_workers < 1:
+        raise ValueError("--cpu-workers must be at least 1")
 
     input_file = args.input
     while input_file is None:
@@ -362,6 +407,7 @@ def main() -> None:
         output_file=args.output,
         max_pages=args.max_pages,
         request_delay=max(args.request_delay, 0),
+        cpu_workers=cpu_workers,
     )
 
 

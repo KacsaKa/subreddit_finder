@@ -146,12 +146,29 @@ Példa:
 Input file path (.xlsx): /full/path/to/subreddits.xlsx
 ```
 
+
+### Apple Silicon optimalizálás (M1/M2/M3)
+A script CPU-intenzív része (posztok transzformációja és számolt mezők képzése) több processzben futtatható:
+- alapértelmezetten `--cpu-workers 0` => automatikus mód
+- Apple Silicon gépen automatikusan az összes elérhető magot használja
+
+Példa maximális terhelésre:
+```bash
+python scrape_reddit_posts.py --max-pages 5 --request-delay 1.0 --cpu-workers 0
+```
+
+Ha manuálisan állítanád:
+```bash
+python scrape_reddit_posts.py --cpu-workers 10
+```
+
 ### Paraméterek magyarázata
 - `--input` (opcionális): ha megadod, nem kérdez rá interaktívan; ha nem adod meg, induláskor kötelező promptban kéri be
 - `--output`: kimeneti CSV fájl neve/útvonala
 - `--log-file`: hibák és folyamatlog fájlja
 - `--max-pages`: feedenként maximum hány lapot kérjen le (`data.after`)
 - `--request-delay`: minimum várakozás másodpercben **minden** HTTP kérés között (rate limit csökkentés)
+- `--cpu-workers`: CPU processzek száma a poszt-transzformációhoz (`0` = automatikus)
 
 ---
 

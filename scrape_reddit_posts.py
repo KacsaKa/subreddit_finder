@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import pandas as pd
@@ -20,6 +20,7 @@ import requests
 USER_AGENT = "reddit-data-research-bot/1.0"
 REQUEST_TIMEOUT = 20
 POST_LIMIT = 25
+RESERVED_FEEDS = {"hot", "new", "top", "rising"}
 
 OUTPUT_COLUMNS = [
     "title",
@@ -55,6 +56,40 @@ class FetchResult:
     next_after: Optional[str]
 
 
+class ProgressBar:
+    def __init__(self, total: int) -> None:
+        self.total = max(total, 1)
+        self.current = 0
+
+    def update(self, step: int = 1) -> None:
+        self.current += step
+        ratio = min(self.current / self.total, 1.0)
+        width = 30
+        done = int(width * ratio)
+        bar = "#" * done + "-" * (width - done)
+        print(f"\rProgress: [{bar}] {self.current}/{self.total}", end="", flush=True)
+
+    def finish(self) -> None:
+        print()
+
+
+class RequestPacer:
+    def __init__(self, min_interval_seconds: float) -> None:
+        self.min_interval_seconds = max(min_interval_seconds, 0)
+        self.last_request_ts = 0.0
+
+    def wait_before_request(self) -> None:
+        if self.min_interval_seconds <= 0:
+            return
+        elapsed = time.time() - self.last_request_ts
+        wait_for = self.min_interval_seconds - elapsed
+        if wait_for > 0:
+            time.sleep(wait_for)
+
+    def mark_request(self) -> None:
+        self.last_request_ts = time.time()
+
+
 def setup_logging(log_file: Path) -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -67,7 +102,6 @@ def setup_logging(log_file: Path) -> None:
 
 
 def normalize_feed_url(value: str) -> Optional[str]:
-    """Normalize supported subreddit URLs to explicit JSON feed endpoints."""
     if not isinstance(value, str):
         return None
 
@@ -76,6 +110,8 @@ def normalize_feed_url(value: str) -> Optional[str]:
         return None
 
     if not text.startswith("http"):
+        if text.lower() in RESERVED_FEEDS:
+            return None
         text = f"https://www.reddit.com/r/{text}"
 
     parsed = urlparse(text)
@@ -85,6 +121,9 @@ def normalize_feed_url(value: str) -> Optional[str]:
     path = parsed.path.rstrip("/")
 
     if re.fullmatch(r"/r/[^/]+", path):
+        subreddit_name = path.split("/")[-1].lower()
+        if subreddit_name in RESERVED_FEEDS:
+            return None
         path = f"{path}/hot.json"
     elif re.fullmatch(r"/r/[^/]+/(hot|new|top|rising)", path):
         path = f"{path}.json"
@@ -107,7 +146,12 @@ def extract_urls_from_row(row: pd.Series) -> list[str]:
     return urls
 
 
-def request_feed(session: requests.Session, base_url: str, after: Optional[str]) -> FetchResult:
+def request_feed(
+    session: requests.Session,
+    base_url: str,
+    after: Optional[str],
+    pacer: RequestPacer,
+) -> FetchResult:
     parsed = urlparse(base_url)
     params = parse_qs(parsed.query)
     params["limit"] = [str(POST_LIMIT)]
@@ -120,7 +164,9 @@ def request_feed(session: requests.Session, base_url: str, after: Optional[str])
 
     retries = 5
     for attempt in range(1, retries + 1):
+        pacer.wait_before_request()
         response = session.get(url, timeout=REQUEST_TIMEOUT)
+        pacer.mark_request()
 
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
@@ -196,14 +242,16 @@ def transform_post(post: dict, now: datetime) -> dict:
     }
 
 
-def iter_feed_urls(input_df: pd.DataFrame) -> Iterable[str]:
+def collect_feed_urls(input_df: pd.DataFrame) -> list[str]:
+    urls: list[str] = []
     for _, row in input_df.iterrows():
-        for url in extract_urls_from_row(row):
-            yield url
+        urls.extend(extract_urls_from_row(row))
+    return urls
 
 
 def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: float) -> None:
     df = pd.read_excel(input_file)
+    feed_urls = collect_feed_urls(df)
 
     headers = {"User-Agent": USER_AGENT}
     session = requests.Session()
@@ -213,13 +261,17 @@ def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: f
     seen_ids: set[str] = set()
     now = datetime.now(tz=timezone.utc)
 
-    for feed_url in iter_feed_urls(df):
+    progress = ProgressBar(total=max(len(feed_urls) * max_pages, 1))
+    pacer = RequestPacer(min_interval_seconds=request_delay)
+
+    for feed_url in feed_urls:
         logging.info("Fetching feed: %s", feed_url)
         after = None
 
         for page in range(max_pages):
+            progress.update()
             try:
-                result = request_feed(session, feed_url, after)
+                result = request_feed(session, feed_url, after, pacer)
             except Exception as exc:
                 logging.error("Failed feed request for %s page %s: %s", feed_url, page + 1, exc)
                 break
@@ -239,8 +291,8 @@ def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: f
                 break
 
             after = result.next_after
-            if request_delay > 0:
-                time.sleep(request_delay)
+
+    progress.finish()
 
     if not all_rows:
         logging.warning("No posts were collected. Writing empty output CSV.")
@@ -274,8 +326,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--request-delay",
         type=float,
-        default=1.0,
-        help="Delay in seconds between paginated requests",
+        default=1.5,
+        help="Minimum delay in seconds between all HTTP requests",
     )
     return parser.parse_args()
 

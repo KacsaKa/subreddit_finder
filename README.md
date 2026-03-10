@@ -116,11 +116,13 @@ Add meg az Excel fájl teljes elérési útját (példa):
 
 A script ezt a fájlt használja végig a teljes futás alatt.
 
+Futás közben látszik egy **progress bar** is (`Progress: [#####-----] ...`), így követhető, hol tart a feldolgozás.
+
 Alapértelmezett további beállítások:
 - output: `reddit_posts.csv`
 - log: `scrape_errors.log`
 - pagination: `--max-pages 1`
-- lapozások között várakozás: `--request-delay 1.0`
+- kérések között minimum várakozás: `--request-delay 1.5`
 
 ### Javasolt valós futtatás több oldallal
 ```bash
@@ -149,7 +151,7 @@ Input file path (.xlsx): /full/path/to/subreddits.xlsx
 - `--output`: kimeneti CSV fájl neve/útvonala
 - `--log-file`: hibák és folyamatlog fájlja
 - `--max-pages`: feedenként maximum hány lapot kérjen le (`data.after`)
-- `--request-delay`: várakozás másodpercben a lapozott kérések között
+- `--request-delay`: minimum várakozás másodpercben **minden** HTTP kérés között (rate limit csökkentés)
 
 ---
 
@@ -188,6 +190,11 @@ A CSV minden sora egy Reddit poszt.
 ---
 
 ## 6) Hibatűrés és rate limit kezelés
+
+### Reserved feed kulcsszavak védelme
+A normalizálásban be van építve a `RESERVED_FEEDS = {"hot", "new", "top", "rising"}` szabály.
+Ez azt jelenti, hogy a puszta `hot/new/top/rising` input **nem** lesz subredditként értelmezve (pl. nem generálódik hibás `/r/rising/hot.json`).
+Így elkerülhetőek a félrevezető lekérések, felesleges rate-limit figyelmeztetések és üres eredmények.
 
 A script kezeli:
 - `429 Too Many Requests` válaszokat (Retry-After vagy exponenciális várakozás)

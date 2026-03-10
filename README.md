@@ -104,10 +104,19 @@ Ajánlott oszlopok (a specifikációd alapján):
 
 ### Alap futtatás
 ```bash
-python scrape_reddit_posts.py --input subreddits.xlsx
+python scrape_reddit_posts.py
 ```
 
-Ez alapból:
+Ez induláskor **kötelezően megkérdezi**:
+- `Input file path (.xlsx):`
+
+Add meg az Excel fájl teljes elérési útját (példa):
+- Linux/Mac: `/home/user/data/subreddits.xlsx`
+- Windows: `C:\Users\User\Desktop\subreddits.xlsx`
+
+A script ezt a fájlt használja végig a teljes futás alatt.
+
+Alapértelmezett további beállítások:
 - output: `reddit_posts.csv`
 - log: `scrape_errors.log`
 - pagination: `--max-pages 1`
@@ -123,8 +132,20 @@ python scrape_reddit_posts.py \
   --request-delay 1.5
 ```
 
+
+### Nem eltéveszthető indulás (kötelező input prompt)
+A script úgy van módosítva, hogy ha nem adsz `--input` paramétert, akkor **nem indul tovább**, amíg nem adsz meg egy valós `.xlsx` fájlútvonalat:
+- üres input esetén újra kérdez
+- nem létező fájl esetén újra kérdez
+- nem `.xlsx` kiterjesztés esetén újra kérdez
+
+Példa:
+```text
+Input file path (.xlsx): /full/path/to/subreddits.xlsx
+```
+
 ### Paraméterek magyarázata
-- `--input` (kötelező): bemeneti Excel fájl (`.xlsx`)
+- `--input` (opcionális): ha megadod, nem kérdez rá interaktívan; ha nem adod meg, induláskor kötelező promptban kéri be
 - `--output`: kimeneti CSV fájl neve/útvonala
 - `--log-file`: hibák és folyamatlog fájlja
 - `--max-pages`: feedenként maximum hány lapot kérjen le (`data.after`)
@@ -203,7 +224,7 @@ Ellenőrizd:
 
 ```bash
 pip install -r requirements.txt
-python scrape_reddit_posts.py --input subreddits.xlsx --max-pages 3 --request-delay 1.5
+python scrape_reddit_posts.py --max-pages 3 --request-delay 1.5
 ```
 
 Ha lefutott, a projekt mappában keresd:

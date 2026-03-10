@@ -258,7 +258,11 @@ def scrape(input_file: Path, output_file: Path, max_pages: int, request_delay: f
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bulk scrape Reddit JSON feeds from an Excel source.")
-    parser.add_argument("--input", required=True, type=Path, help="Path to input Excel file (.xlsx)")
+    parser.add_argument(
+        "--input",
+        type=Path,
+        help="Path to input Excel file (.xlsx). If omitted, the script prompts for it at startup.",
+    )
     parser.add_argument("--output", type=Path, default=Path("reddit_posts.csv"), help="Output CSV file path")
     parser.add_argument("--log-file", type=Path, default=Path("scrape_errors.log"), help="Log file path")
     parser.add_argument(
@@ -283,8 +287,26 @@ def main() -> None:
     if args.max_pages < 1:
         raise ValueError("--max-pages must be at least 1")
 
+    input_file = args.input
+    while input_file is None:
+        raw_input_path = input("Input file path (.xlsx): ").strip().strip('"').strip("'")
+        if not raw_input_path:
+            print("Input file path is required. Please provide a valid .xlsx file path.")
+            continue
+
+        candidate = Path(raw_input_path).expanduser()
+        if not candidate.exists():
+            print(f"File not found: {candidate}")
+            continue
+        if candidate.suffix.lower() != ".xlsx":
+            print("Please provide an .xlsx Excel file.")
+            continue
+        input_file = candidate
+
+    logging.info("Using input file: %s", input_file)
+
     scrape(
-        input_file=args.input,
+        input_file=input_file,
         output_file=args.output,
         max_pages=args.max_pages,
         request_delay=max(args.request_delay, 0),

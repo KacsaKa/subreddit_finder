@@ -63,6 +63,14 @@ class ProgressBar:
     def __init__(self, total: int) -> None:
         self.total = max(total, 1)
         self.current = 0
+        self.started_at = time.time()
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        whole = max(int(seconds), 0)
+        hours, rem = divmod(whole, 3600)
+        minutes, secs = divmod(rem, 60)
+        return f"{hours}:{minutes:02d}:{secs:02d}"
 
     def update(self, step: int = 1) -> None:
         self.current += step
@@ -70,7 +78,21 @@ class ProgressBar:
         width = 30
         done = int(width * ratio)
         bar = "#" * done + "-" * (width - done)
-        print(f"\rProgress: [{bar}] {self.current}/{self.total}", end="", flush=True)
+
+        elapsed = time.time() - self.started_at
+        avg_per_page = elapsed / self.current if self.current else 0
+        remaining_pages = max(self.total - self.current, 0)
+        eta_seconds = remaining_pages * avg_per_page
+
+        elapsed_txt = self._format_duration(elapsed)
+        eta_txt = self._format_duration(eta_seconds)
+
+        print(
+            f"\rProgress: [{bar}] {self.current}/{self.total} page | "
+            f"current time spent {elapsed_txt} / ETA {eta_txt}",
+            end="",
+            flush=True,
+        )
 
     def finish(self) -> None:
         print()

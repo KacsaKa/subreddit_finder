@@ -116,7 +116,7 @@ Add meg az Excel fájl teljes elérési útját (példa):
 
 A script ezt a fájlt használja végig a teljes futás alatt.
 
-Futás közben látszik egy **progress bar** is (`Progress: [#####-----] ...`), így követhető, hol tart a feldolgozás.
+Futás közben látszik egy **globális progress bar** is (oldalszinten), pl.: `125/1000 page | current time spent 0:02:10 / ETA 0:35:42`, így nem feedenként, hanem a teljes futásra kapsz előrehaladást és becsült hátralévő időt.
 
 Alapértelmezett további beállítások:
 - output: `reddit_posts.csv`

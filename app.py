@@ -14,7 +14,7 @@ from config import (
     MIN_CPU_LIMIT_PERCENT,
 )
 from pipeline import PipelineError, run_pipeline
-from utils import PipelineIO, RunConfig, detect_cpu_count, read_excel_sheet
+from utils import PipelineIO, RunConfig, detect_cpu_count, read_excel_source
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -34,12 +34,12 @@ left_col, right_col = st.columns(2)
 with left_col:
     st.subheader("Embedding / Cannibalization Source")
     target_path = st.text_input("Excel file path", value="", key="target_path")
-    target_sheet = st.text_input("Sheet name", value="", key="target_sheet")
+    target_sheet = st.text_input("Sheet name (optional; blank = all sheets)", value="", key="target_sheet")
 
 with right_col:
     st.subheader("Reddit Source")
     reddit_path = st.text_input("Excel file path", value="", key="reddit_path")
-    reddit_sheet = st.text_input("Sheet name", value="", key="reddit_sheet")
+    reddit_sheet = st.text_input("Sheet name (optional; blank = all sheets)", value="", key="reddit_sheet")
 
 st.markdown("### Run Configuration")
 out_col1, out_col2 = st.columns(2)
@@ -90,8 +90,10 @@ def update_progress(value: float, message: str) -> None:
 
 def show_preview(path: str, sheet_name: str, title: str) -> None:
     try:
-        df = read_excel_sheet(path, sheet_name)
+        df = read_excel_source(path, sheet_name)
+        mode = sheet_name.strip() or "ALL_SHEETS"
         st.markdown(f"#### Preview: {title}")
+        st.caption(f"Sheet mode: {mode}")
         st.write("Columns:", list(df.columns))
         st.dataframe(df.head(5), use_container_width=True)
     except Exception as exc:  # preview should not stop main workflow
@@ -101,10 +103,10 @@ def show_preview(path: str, sheet_name: str, title: str) -> None:
 if preview_rows:
     preview_col1, preview_col2 = st.columns(2)
     with preview_col1:
-        if target_path and target_sheet:
+        if target_path:
             show_preview(target_path, target_sheet, "Embedding / Cannibalization Source")
     with preview_col2:
-        if reddit_path and reddit_sheet:
+        if reddit_path:
             show_preview(reddit_path, reddit_sheet, "Reddit Source")
 
 if run_clicked or validate_clicked:

@@ -60,10 +60,10 @@ In the app:
 
 1. **Embedding / Cannibalization Source**
    - Excel file path
-   - Sheet name
+   - Sheet name (optional; leave blank to process all sheets)
 2. **Reddit Source**
    - Excel file path
-   - Sheet name
+   - Sheet name (optional; leave blank to process all sheets)
 
 ### Step 3 — Configure run settings
 In **Run Configuration** set:

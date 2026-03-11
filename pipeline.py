@@ -18,7 +18,7 @@ from utils import (
     emit,
     normalize_reddit_df,
     normalize_target_df,
-    read_excel_sheet,
+    read_excel_source,
     validate_paths_and_names,
     validate_reddit_columns,
     validate_target_columns,
@@ -125,8 +125,8 @@ def run_pipeline(
         raise PipelineError("\n".join(errors))
 
     update(0)
-    target_df = read_excel_sheet(io_cfg.target_path, io_cfg.target_sheet)
-    reddit_df = read_excel_sheet(io_cfg.reddit_path, io_cfg.reddit_sheet)
+    target_df = read_excel_source(io_cfg.target_path, io_cfg.target_sheet, source_tag_column="target_source_sheet")
+    reddit_df = read_excel_source(io_cfg.reddit_path, io_cfg.reddit_sheet, source_tag_column="reddit_source_sheet")
 
     target_errors = validate_target_columns(target_df)
     reddit_errors = validate_reddit_columns(reddit_df)
@@ -137,6 +137,8 @@ def run_pipeline(
         run_summary = {
             "loaded_target_rows": len(target_df),
             "loaded_reddit_rows": len(reddit_df),
+            "target_sheet_mode": io_cfg.target_sheet.strip() or "ALL_SHEETS",
+            "reddit_sheet_mode": io_cfg.reddit_sheet.strip() or "ALL_SHEETS",
             "validated_only": True,
         }
         return PipelineResult(outputs={}, output_path=None, run_summary=run_summary)
@@ -381,6 +383,8 @@ def run_pipeline(
         "runtime_duration_sec": runtime,
         "cpu_limit_used": run_cfg.cpu_limit_percent,
         "worker_count_used": workers,
+        "target_sheet_mode": io_cfg.target_sheet.strip() or "ALL_SHEETS",
+        "reddit_sheet_mode": io_cfg.reddit_sheet.strip() or "ALL_SHEETS",
     }
 
     summary_df = pd.DataFrame(

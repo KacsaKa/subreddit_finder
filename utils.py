@@ -78,10 +78,7 @@ def validate_paths_and_names(io_cfg: PipelineIO) -> list[str]:
     if not Path(io_cfg.reddit_path).exists():
         errors.append(f"Reddit file not found: {io_cfg.reddit_path}")
 
-    if not io_cfg.target_sheet.strip():
-        errors.append("Target sheet name is required.")
-    if not io_cfg.reddit_sheet.strip():
-        errors.append("Reddit sheet name is required.")
+    # Sheet names are optional: blank means read and combine all sheets in the workbook.
 
     if not io_cfg.output_dir.strip():
         errors.append("Output directory is required.")
@@ -94,8 +91,34 @@ def validate_paths_and_names(io_cfg: PipelineIO) -> list[str]:
     return errors
 
 
-def read_excel_sheet(path: str, sheet_name: str) -> pd.DataFrame:
-    return pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
+def read_excel_source(path: str, sheet_name: str, source_tag_column: str = "source_sheet") -> pd.DataFrame:
+    """Read one sheet if provided, else combine all sheets from the workbook.
+
+    If `sheet_name` is blank, all sheets are loaded and concatenated with a helper
+    column that records originating sheet names.
+    """
+    workbook = pd.ExcelFile(path, engine="openpyxl")
+    selected_sheet = normalize_text(sheet_name)
+
+    if selected_sheet:
+        if selected_sheet not in workbook.sheet_names:
+            available = ", ".join(workbook.sheet_names)
+            raise ValueError(
+                f"Sheet '{selected_sheet}' not found in {path}. Available sheets: {available}"
+            )
+        frame = pd.read_excel(workbook, sheet_name=selected_sheet, engine="openpyxl")
+        frame[source_tag_column] = selected_sheet
+        return frame
+
+    frames: list[pd.DataFrame] = []
+    for name in workbook.sheet_names:
+        frame = pd.read_excel(workbook, sheet_name=name, engine="openpyxl")
+        frame[source_tag_column] = name
+        frames.append(frame)
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 def validate_target_columns(df: pd.DataFrame) -> list[str]:
